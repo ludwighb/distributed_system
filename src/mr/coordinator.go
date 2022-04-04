@@ -9,7 +9,8 @@ import "net/http"
 
 type Coordinator struct {
 	// Your definitions here.
-
+	mapTaskNum int
+	reduceTaskNum int
 }
 
 // Your code here -- RPC handlers for the worker to call.
@@ -46,12 +47,10 @@ func (c *Coordinator) server() {
 // if the entire job has finished.
 //
 func (c *Coordinator) Done() bool {
-	ret := false
 
 	// Your code here.
-
-
-	return ret
+	// TODO : double check this is right.
+	return mapTaskNum ==0  && reduceTaskNum == 0
 }
 
 //
@@ -60,7 +59,10 @@ func (c *Coordinator) Done() bool {
 // nReduce is the number of reduce tasks to use.
 //
 func MakeCoordinator(files []string, nReduce int) *Coordinator {
-	c := Coordinator{}
+	c := Coordinator{
+		mapTaskNum: len(files),
+		reduceTaskNum: nReduce,
+	}
 
 	// Your code here.
 

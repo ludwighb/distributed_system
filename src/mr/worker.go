@@ -1,4 +1,4 @@
-package mr
+	package mr
 
 import "fmt"
 import "log"
@@ -28,6 +28,10 @@ func ihash(key string) int {
 //
 // main/mrworker.go calls this function.
 //
+// TODO: perodically asks for task. 
+// Map task: 
+// Reduce task:
+// Return status code when finished. 
 func Worker(mapf func(string, string) []KeyValue,
 	reducef func(string, []string) string) {
 
@@ -35,7 +39,6 @@ func Worker(mapf func(string, string) []KeyValue,
 
 	// uncomment to send the Example RPC to the coordinator.
 	// CallExample()
-
 }
 
 //
@@ -65,7 +68,7 @@ func CallExample() {
 // send an RPC request to the coordinator, wait for the response.
 // usually returns true.
 // returns false if something goes wrong.
-//
+// TODO: exit when coordinator exits
 func call(rpcname string, args interface{}, reply interface{}) bool {
 	// c, err := rpc.DialHTTP("tcp", "127.0.0.1"+":1234")
 	sockname := coordinatorSock()
