@@ -14,12 +14,23 @@ import "strconv"
 // and reply for an RPC.
 //
 
-type ExampleArgs struct {
-	X int
+type Request struct {
+
 }
 
-type ExampleReply struct {
-	Y int
+type Response struct {
+	TaskNotReady bool 
+	IsMapTask bool
+	MapTask MapTaskArg
+	ReduceTask ReduceTaskArg
+}
+
+type MapTaskArg struct {
+	FileName string
+}
+
+type ReduceTaskArg struct {
+	Files []string
 }
 
 // Add your RPC definitions here.

@@ -36,6 +36,12 @@ func Worker(mapf func(string, string) []KeyValue,
 	reducef func(string, []string) string) {
 
 	// Your worker implementation here.
+	resp := &Response{}
+	callSuccess := call("Coordinator.CoordinatorHandler", &Request{}, resp)
+	if !callSuccess {
+		log.Fatal("Failed to call coordinator")
+	}
+	fmt.Printf("resp: %v\n", resp)
 
 	// uncomment to send the Example RPC to the coordinator.
 	// CallExample()
@@ -49,19 +55,13 @@ func Worker(mapf func(string, string) []KeyValue,
 func CallExample() {
 
 	// declare an argument structure.
-	args := ExampleArgs{}
-
-	// fill in the argument(s).
-	args.X = 99
-
-	// declare a reply structure.
-	reply := ExampleReply{}
+	request := Request{}
+	reply := Response{}
 
 	// send the RPC request, wait for the reply.
-	call("Coordinator.Example", &args, &reply)
+	call("Coordinator.Example", &request, &reply)
 
-	// reply.Y should be 100.
-	fmt.Printf("reply.Y %v\n", reply.Y)
+	fmt.Printf("reply.Y %v\n", reply)
 }
 
 //

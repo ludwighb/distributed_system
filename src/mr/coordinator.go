@@ -20,13 +20,16 @@ type Coordinator struct {
 //
 // the RPC argument and reply types are defined in rpc.go.
 //
-func (c *Coordinator) Example(args *ExampleArgs, reply *ExampleReply) error {
-	reply.Y = args.X + 1
+func (c *Coordinator) Example(args *Request, reply *Response) error {
 	return nil
 }
 
+func (c * Coordinator) CoordinatorHandler(args *Request, resp *Response) ( error) {
+	resp.IsMapTask = true
+	return nil
+} 
 
-//
+
 // start a thread that listens for RPCs from worker.go
 //
 func (c *Coordinator) server() {
@@ -50,7 +53,7 @@ func (c *Coordinator) Done() bool {
 
 	// Your code here.
 	// TODO : double check this is right.
-	return mapTaskNum ==0  && reduceTaskNum == 0
+	return c.mapTaskNum ==0  && c.reduceTaskNum == 0
 }
 
 //
