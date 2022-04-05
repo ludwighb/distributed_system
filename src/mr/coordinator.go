@@ -1,6 +1,7 @@
 package mr
 
 import "log"
+import "fmt"
 import "net"
 import "os"
 import "net/rpc"
@@ -9,24 +10,21 @@ import "net/http"
 
 type Coordinator struct {
 	// Your definitions here.
-	mapTaskNum int
-	reduceTaskNum int
+	mapTasks []*MapTask
+	reduceTasks []*ReduceTask
 }
 
-// Your code here -- RPC handlers for the worker to call.
+func (c * Coordinator) CoordinatorHandler(args *GetTaskRequest, resp *GetTaskResponse) (error) {
+	for  _, mapTask := range c.mapTasks{
+		fmt.Printf("map task: %v\n", mapTask)
+	}
 
-//
-// an example RPC handler.
-//
-// the RPC argument and reply types are defined in rpc.go.
-//
-func (c *Coordinator) Example(args *Request, reply *Response) error {
-	return nil
-}
+	for  _, reduceTask := range c.reduceTasks{
+		fmt.Printf("reduce task: %v\n", reduceTask)
+	}
 
-func (c * Coordinator) CoordinatorHandler(args *Request, resp *Response) ( error) {
-	resp.IsMapTask = true
 	return nil
+
 } 
 
 
@@ -53,7 +51,7 @@ func (c *Coordinator) Done() bool {
 
 	// Your code here.
 	// TODO : double check this is right.
-	return c.mapTaskNum ==0  && c.reduceTaskNum == 0
+	return len(c.mapTasks) ==0 && len(c.reduceTasks) ==0 
 }
 
 //
@@ -62,9 +60,25 @@ func (c *Coordinator) Done() bool {
 // nReduce is the number of reduce tasks to use.
 //
 func MakeCoordinator(files []string, nReduce int) *Coordinator {
+	mapTasks := []*MapTask{}
+	reduceTasks := []*ReduceTask{}
+	for _, file := range files{
+		mapTasks = append(mapTasks, &MapTask{FileName: file})
+	}
+
+	for i:=0; i< nReduce; i++ {
+		fileList := []string{}
+		for j := 0; j< len(files); j++{
+			intermediateFileName := fmt.Sprintf("mr-%02d-%02d.txt", j, i)
+			fileList = append(fileList, intermediateFileName)
+		}
+		reduceTask := &ReduceTask{Files: fileList}
+		reduceTasks = append(reduceTasks, reduceTask)
+	}
+
 	c := Coordinator{
-		mapTaskNum: len(files),
-		reduceTaskNum: nReduce,
+		mapTasks: mapTasks,
+		reduceTasks: reduceTasks,
 	}
 
 	// Your code here.

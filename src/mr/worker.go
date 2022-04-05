@@ -1,10 +1,11 @@
-	package mr
+package mr
 
-import "fmt"
-import "log"
-import "net/rpc"
-import "hash/fnv"
-
+import (
+	"fmt"
+	"hash/fnv"
+	"log"
+	"net/rpc"
+)
 
 //
 // Map functions return a slice of KeyValue.
@@ -25,10 +26,8 @@ func ihash(key string) int {
 }
 
 
-//
-// main/mrworker.go calls this function.
-//
-// TODO: perodically asks for task. 
+
+// T
 // Map task: 
 // Reduce task:
 // Return status code when finished. 
@@ -36,15 +35,27 @@ func Worker(mapf func(string, string) []KeyValue,
 	reducef func(string, []string) string) {
 
 	// Your worker implementation here.
-	resp := &Response{}
-	callSuccess := call("Coordinator.CoordinatorHandler", &Request{}, resp)
+	resp := &GetTaskResponse{}
+	callSuccess := call("Coordinator.CoordinatorHandler", &GetTaskRequest{}, resp)
+	// TODO: wait if the task is not ready
 	if !callSuccess {
 		log.Fatal("Failed to call coordinator")
 	}
 	fmt.Printf("resp: %v\n", resp)
 
-	// uncomment to send the Example RPC to the coordinator.
-	// CallExample()
+	if resp.Type == MAPTASK {
+		err :=handleMapTask(resp.TaskArg.(*MapTask), mapf)
+		if err != nil {
+			
+		}
+	}else{
+		// TODO: handle reduce task
+	}
+
+}
+
+func handleMapTask(task *MapTask, mapFunc func(string, string) []KeyValue) error{
+	return nil
 }
 
 //
@@ -55,8 +66,8 @@ func Worker(mapf func(string, string) []KeyValue,
 func CallExample() {
 
 	// declare an argument structure.
-	request := Request{}
-	reply := Response{}
+	request := GetTaskRequest{}
+	reply := GetTaskResponse{}
 
 	// send the RPC request, wait for the reply.
 	call("Coordinator.Example", &request, &reply)
