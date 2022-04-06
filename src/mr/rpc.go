@@ -31,7 +31,8 @@ type ChangeTaskStatusRequest struct {
 }
 
 type Task struct {
-	ID string
+	ID        string
+	ReduceNum int
 }
 
 type GetTaskResponse struct {

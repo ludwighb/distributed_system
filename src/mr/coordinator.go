@@ -83,7 +83,10 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 		idToLockMap[id] = &sync.Mutex{}
 		mapTasks = append(mapTasks, &MapTask{
 			FileName: file,
-			Task:     &Task{ID: id},
+			Task: &Task{
+				ID:        id,
+				ReduceNum: nReduce,
+			},
 		})
 	}
 
@@ -97,7 +100,10 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 		idToLockMap[id] = &sync.Mutex{}
 		reduceTask := &ReduceTask{
 			Files: fileList,
-			Task:  &Task{ID: id},
+			Task: &Task{
+				ID:        id,
+				ReduceNum: nReduce,
+			},
 		}
 		reduceTasks = append(reduceTasks, reduceTask)
 	}
