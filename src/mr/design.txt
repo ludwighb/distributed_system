@@ -1,4 +1,7 @@
 1. Map tasks: 
-    a.Assign all map tasks:
-    b.Worker returns success for map task. 
-    c.
+    a. Assign just one map task to worker. 
+    b. assign all map task to worker.
+    c. handle concurrency and task failure. 
+    d. Assign just one reduce task to worker.
+    e. assign all reduce task to worker.
+    f. handle concurrency and task failure. 

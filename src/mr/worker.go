@@ -1,6 +1,7 @@
 package mr
 
 import (
+	"encoding/gob"
 	"fmt"
 	"hash/fnv"
 	"log"
@@ -25,18 +26,19 @@ func ihash(key string) int {
 	return int(h.Sum32() & 0x7fffffff)
 }
 
-
-
 // T
-// Map task: 
+// Map task:
 // Reduce task:
-// Return status code when finished. 
+// Return status code when finished.
 func Worker(mapf func(string, string) []KeyValue,
 	reducef func(string, []string) string) {
+	// TODO: why need to register here?
+	gob.Register(MapTask{})
+	gob.Register(ReduceTask{})
 
 	// Your worker implementation here.
 	resp := &GetTaskResponse{}
-	callSuccess := call("Coordinator.CoordinatorHandler", &GetTaskRequest{}, resp)
+	callSuccess := call("Coordinator.GetTaskHandler", &GetTaskRequest{}, resp)
 	// TODO: wait if the task is not ready
 	if !callSuccess {
 		log.Fatal("Failed to call coordinator")
@@ -44,17 +46,30 @@ func Worker(mapf func(string, string) []KeyValue,
 	fmt.Printf("resp: %v\n", resp)
 
 	if resp.Type == MAPTASK {
-		err :=handleMapTask(resp.TaskArg.(*MapTask), mapf)
-		if err != nil {
-			
+		// TODO: why can't i just resp.TaskArg.(*MapTask)??? Isn't interface can either store a copy of struct, or pointer to struct?
+		arg, ok := resp.TaskArg.(MapTask)
+		if !ok {
+			log.Fatalf("Failed to convert map task arg!")
 		}
-	}else{
-		// TODO: handle reduce task
+		err := handleMapTask(&arg, mapf)
+		if err != nil {
+
+		}
+	} else {
+		err := handleReduceTask(resp.TaskArg.(*ReduceTask), reducef)
+		if err != nil {
+
+		}
 	}
 
 }
 
-func handleMapTask(task *MapTask, mapFunc func(string, string) []KeyValue) error{
+func handleMapTask(task *MapTask, mapFunc func(string, string) []KeyValue) error {
+	fmt.Printf("id: %v, filename: %v\n", task.Task.ID, task.FileName)
+	return nil
+}
+
+func handleReduceTask(task *ReduceTask, reduceFunc func(string, []string) string) error {
 	return nil
 }
 

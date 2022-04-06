@@ -1,11 +1,5 @@
 package mr
 
-//
-// RPC definitions.
-//
-// remember to capitalize all names.
-//
-
 import (
 	"os"
 	"strconv"
@@ -14,15 +8,17 @@ import (
 type TaskStatus int
 
 const (
-	SUCCESS TaskStatus = 1
-	FAIL    TaskStatus = 2
+	NOTSTARTED TaskStatus = 0
+	ASSIGNED   TaskStatus = 1
+	SUCCESS    TaskStatus = 2
+	FAIL       TaskStatus = 3
 )
 
 type TaskType int
 
 const (
-	MAPTASK    TaskType = 1
-	REDUCETASK TaskType = 2
+	MAPTASK    TaskType = 0
+	REDUCETASK TaskType = 1
 )
 
 // TODO: this is empty, is
@@ -30,11 +26,11 @@ type GetTaskRequest struct {
 }
 
 type ChangeTaskStatusRequest struct {
-	ID     TaskID
+	ID     Task
 	status TaskStatus
 }
 
-type TaskID struct {
+type Task struct {
 	ID string
 }
 
@@ -45,12 +41,12 @@ type GetTaskResponse struct {
 }
 
 type MapTask struct {
-	ID       TaskID
+	Task     *Task
 	FileName string
 }
 
 type ReduceTask struct {
-	ID    TaskID
+	Task  *Task
 	Files []string
 }
 
