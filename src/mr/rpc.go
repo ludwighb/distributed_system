@@ -21,24 +21,37 @@ const (
 	REDUCETASK TaskType = 1
 )
 
+type AllTaskStatus int
+
+const (
+	TASKNOTREQDY AllTaskStatus = 0
+	TASKASSIGNED AllTaskStatus = 1
+	TASKSALLDONE AllTaskStatus = 2
+)
+
 // TODO: this is empty, is
 type GetTaskRequest struct {
 }
 
 type ChangeTaskStatusRequest struct {
-	ID     Task
-	status TaskStatus
+	Name   string
+	Status TaskStatus
+}
+
+// TODO: for this request i think it doesn't need any respose info, right?
+type ChangeTaskStatusResponse struct {
 }
 
 type Task struct {
-	ID        string
+	Name      string
+	ID        int
 	ReduceNum int
 }
 
 type GetTaskResponse struct {
-	TaskNotReady bool
-	Type         TaskType
-	TaskArg      interface{}
+	STATUS  AllTaskStatus
+	Type    TaskType
+	TaskArg interface{}
 }
 
 type MapTask struct {

@@ -11,34 +11,52 @@ import (
 	"sync"
 )
 
+// TODO: Cahnge to just use one lock
 type Coordinator struct {
 	// Your definitions here.
 	mapTasks    []*MapTask
 	reduceTasks []*ReduceTask
 	// TODO: double check if it's ok to use multiple locks for the same map.
-	idToLockMap   map[string]*sync.Mutex
-	idToStatusMap map[string]TaskStatus
+	nameToLockMap   map[string]*sync.Mutex
+	nameToStatusMap map[string]TaskStatus
 }
 
-func (c *Coordinator) GetTaskHandler(args *GetTaskRequest, resp *GetTaskResponse) error {
+func (c *Coordinator) GetTaskHandler(req *GetTaskRequest, resp *GetTaskResponse) error {
 	taskAssigned := false
+	taskAllDone := true
 	for _, task := range c.mapTasks {
-		id := task.Task.ID
-		c.idToLockMap[id].Lock()
-		if c.idToStatusMap[id] == NOTSTARTED || c.idToStatusMap[id] == FAIL {
+		name := task.Task.Name
+		c.nameToLockMap[name].Lock()
+		if c.nameToStatusMap[name] != SUCCESS {
+			taskAllDone = false
+		}
+
+		if c.nameToStatusMap[name] == NOTSTARTED || c.nameToStatusMap[name] == FAIL {
 			taskAssigned = true
-			c.idToStatusMap[id] = ASSIGNED
+			c.nameToStatusMap[name] = ASSIGNED
 			resp.TaskArg = task
-			c.idToLockMap[task.Task.ID].Unlock()
+			c.nameToLockMap[task.Task.Name].Unlock()
 			fmt.Printf("task %v is assigned\n", task.Task.ID)
 			break
 		}
-		c.idToLockMap[task.Task.ID].Unlock()
+		c.nameToLockMap[task.Task.Name].Unlock()
+		resp.STATUS = TASKASSIGNED
 	}
 
-	if !taskAssigned {
-		return fmt.Errorf("No map task assigned!")
+	if taskAllDone {
+		resp.STATUS = TASKSALLDONE
+	} else if !taskAssigned {
+		resp.STATUS = TASKNOTREQDY
 	}
+
+	return nil
+}
+
+func (c *Coordinator) ChangeTaskStatusHandler(req *ChangeTaskStatusRequest, resp *ChangeTaskStatusResponse) error {
+	c.nameToLockMap[req.Name].Lock()
+	c.nameToStatusMap[req.Name] = req.Status
+	fmt.Printf("Task %v status changed to %v\n", req.Name, req.Status)
+	c.nameToLockMap[req.Name].Unlock()
 	return nil
 }
 
@@ -76,15 +94,16 @@ func (c *Coordinator) Done() bool {
 func MakeCoordinator(files []string, nReduce int) *Coordinator {
 	mapTasks := []*MapTask{}
 	reduceTasks := []*ReduceTask{}
-	idToLockMap := map[string]*sync.Mutex{}
-	idToStatusMap := map[string]TaskStatus{}
+	nameToLockMap := map[string]*sync.Mutex{}
+	nameToStatusMap := map[string]TaskStatus{}
 	for i, file := range files {
-		id := fmt.Sprintf("map-task-%v", i)
-		idToLockMap[id] = &sync.Mutex{}
+		name := fmt.Sprintf("map-task-%v", i)
+		nameToLockMap[name] = &sync.Mutex{}
 		mapTasks = append(mapTasks, &MapTask{
 			FileName: file,
 			Task: &Task{
-				ID:        id,
+				Name:      name,
+				ID:        i,
 				ReduceNum: nReduce,
 			},
 		})
@@ -96,12 +115,13 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 			intermediateFileName := fmt.Sprintf("mr-%v-%v.txt", j, i)
 			fileList = append(fileList, intermediateFileName)
 		}
-		id := fmt.Sprintf("reduce-task-%v", i)
-		idToLockMap[id] = &sync.Mutex{}
+		name := fmt.Sprintf("reduce-task-%v", i)
+		nameToLockMap[name] = &sync.Mutex{}
 		reduceTask := &ReduceTask{
 			Files: fileList,
 			Task: &Task{
-				ID:        id,
+				Name:      name,
+				ID:        i,
 				ReduceNum: nReduce,
 			},
 		}
@@ -109,10 +129,10 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 	}
 
 	c := Coordinator{
-		mapTasks:      mapTasks,
-		reduceTasks:   reduceTasks,
-		idToLockMap:   idToLockMap,
-		idToStatusMap: idToStatusMap,
+		mapTasks:        mapTasks,
+		reduceTasks:     reduceTasks,
+		nameToLockMap:   nameToLockMap,
+		nameToStatusMap: nameToStatusMap,
 	}
 
 	gob.Register(MapTask{})

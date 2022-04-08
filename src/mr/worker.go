@@ -37,10 +37,10 @@ func (a ByKey) Less(i, j int) bool { return a[i].Key < a[j].Key }
 // use ihash(key) % NReduce to choose the reduce
 // task number for each KeyValue emitted by Map.
 //
-func ihash(key string, reduceNumber int) int {
+func ihash(key string) int {
 	h := fnv.New32a()
 	h.Write([]byte(key))
-	return int(h.Sum32()&0x7fffffff) % reduceNumber
+	return int(h.Sum32() & 0x7fffffff)
 }
 
 func groupByKey(keyValueArr []KeyValue) []KeyValues {
@@ -74,94 +74,98 @@ func Worker(mapf func(string, string) []KeyValue,
 	gob.Register(MapTask{})
 	gob.Register(ReduceTask{})
 
-	// Your worker implementation here.
-	resp := &GetTaskResponse{}
-	callSuccess := call("Coordinator.GetTaskHandler", &GetTaskRequest{}, resp)
-	// TODO: wait if the task is not ready
-	if !callSuccess {
-		log.Fatal("Failed to call coordinator")
-	}
-	fmt.Printf("resp: %v\n", resp)
-
-	if resp.Type == MAPTASK {
-		// TODO: why can't i just resp.TaskArg.(*MapTask)??? Isn't interface can either store a copy of struct, or pointer to struct?
-		arg, ok := resp.TaskArg.(MapTask)
-		if !ok {
-			log.Fatalf("Failed to convert map task arg!")
+	for true {
+		resp := &GetTaskResponse{}
+		callSuccess := call("Coordinator.GetTaskHandler", &GetTaskRequest{}, resp)
+		// TODO: wait if the task is not ready
+		if !callSuccess {
+			log.Fatal("Failed to call coordinator")
 		}
-		err := handleMapTask(&arg, mapf)
-		if err != nil {
-
+		// TODO: let worker sleep when task not ready
+		if resp.STATUS == TASKSALLDONE {
+			fmt.Printf("All tasks finished. Exiting worker")
+			return
 		}
-	} else {
-		err := handleReduceTask(resp.TaskArg.(*ReduceTask), reducef)
-		if err != nil {
 
+		if resp.Type == MAPTASK {
+			// TODO: why can't i just resp.TaskArg.(*MapTask)??? Isn't interface can either store a copy of struct, or pointer to struct?
+			arg, ok := resp.TaskArg.(MapTask)
+			if !ok {
+				log.Fatalf("Failed to convert map task arg!")
+			}
+			err := handleMapTask(&arg, mapf)
+			if err != nil {
+
+			}
+		} else {
+			err := handleReduceTask(resp.TaskArg.(*ReduceTask), reducef)
+			if err != nil {
+
+			}
 		}
+
 	}
 
 }
 
-// TODO: 1. debug why there are only one record in each file
-//       2. send response back to coordinator
 func handleMapTask(task *MapTask, mapFunc func(string, string) []KeyValue) error {
 	fmt.Printf("start handling task : id: %v, filename: %v\n", task.Task.ID, task.FileName)
 	file, err := os.Open(task.FileName)
 	if err != nil {
-		log.Fatalf("cannot open %v", task.FileName)
+		return fmt.Errorf("cannot open %v", task.FileName)
 	}
 	content, err := ioutil.ReadAll(file)
 	if err != nil {
-		log.Fatalf("cannot read %v", task.FileName)
+		return fmt.Errorf("cannot read %v", task.FileName)
 	}
 	file.Close()
 	keyValueArr := mapFunc(task.FileName, string(content))
 	sort.Sort(ByKey(keyValueArr))
 	sortedKeyVaules := groupByKey(keyValueArr)
 
-	i := 0
-	for i < len(sortedKeyVaules) {
-		j := i + 1
-		for j < len(sortedKeyVaules) && ihash(sortedKeyVaules[j].Key, task.Task.ReduceNum) == ihash(sortedKeyVaules[i].Key, task.Task.ReduceNum) {
-			j++
-		}
+	intermediateFileNames := make([]string, task.Task.ReduceNum)
+	files := make([]*os.File, task.Task.ReduceNum)
+	encoders := make([]*json.Encoder, task.Task.ReduceNum)
+	tempArr := make([][]*KeyValues, task.Task.ReduceNum)
 
-		// TODO: name the file correctly
-		intermediateFileName := fmt.Sprintf("mr-%v-%v.json", 0, ihash(sortedKeyVaules[i].Key, task.Task.ReduceNum))
+	for i := 0; i < task.Task.ReduceNum; i++ {
+		intermediateFileName := fmt.Sprintf("mr-%v-%v.json", task.Task.ID, ihash(sortedKeyVaules[i].Key)%task.Task.ReduceNum)
+		intermediateFileNames[i] = intermediateFileName
 		f, err := os.Create(intermediateFileName)
 		if err != nil {
-			log.Fatalf("Failed to create file %v: %v", f, err)
+			return fmt.Errorf("failed to create file %v: %v", f, err)
 		}
-		defer f.Close()
-		enc := json.NewEncoder(f)
-		for k := i; k < j; k++ {
-			enc.Encode(sortedKeyVaules[k])
-		}
-		i = j
+		files[i] = file
+		encoders[i] = json.NewEncoder(f)
+		tempArr[i] = []*KeyValues{}
+	}
 
+	for i := 0; i < len(sortedKeyVaules); i++ {
+		hash := ihash(sortedKeyVaules[i].Key) % task.Task.ReduceNum
+		tempArr[hash] = append(tempArr[hash], &sortedKeyVaules[i])
+	}
+
+	for i := 0; i < task.Task.ReduceNum; i++ {
+		encoders[i].Encode(tempArr[i])
+		files[i].Close()
+	}
+
+	changeStatusReq := &ChangeTaskStatusRequest{
+		Name:   task.Task.Name,
+		Status: SUCCESS,
+	}
+	changeStatusResp := &ChangeTaskStatusResponse{}
+
+	fmt.Printf("map task %v done! \n", task.Task.Name)
+	callSuccess := call("Coordinator.ChangeTaskStatusHandler", changeStatusReq, changeStatusResp)
+	if !callSuccess {
+		return fmt.Errorf("failed to call Coordinator.ChangeTaskStatusHandler!")
 	}
 	return nil
 }
 
 func handleReduceTask(task *ReduceTask, reduceFunc func(string, []string) string) error {
 	return nil
-}
-
-//
-// example function to show how to make an RPC call to the coordinator.
-//
-// the RPC argument and reply types are defined in rpc.go.
-//
-func CallExample() {
-
-	// declare an argument structure.
-	request := GetTaskRequest{}
-	reply := GetTaskResponse{}
-
-	// send the RPC request, wait for the reply.
-	call("Coordinator.Example", &request, &reply)
-
-	fmt.Printf("reply.Y %v\n", reply)
 }
 
 //
