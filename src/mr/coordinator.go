@@ -23,27 +23,51 @@ type Coordinator struct {
 
 func (c *Coordinator) GetTaskHandler(req *GetTaskRequest, resp *GetTaskResponse) error {
 	taskAssigned := false
-	taskAllDone := true
+	mapTaskAllDone := true
 	for _, task := range c.mapTasks {
 		name := task.Task.Name
 		c.nameToLockMap[name].Lock()
 		if c.nameToStatusMap[name] != SUCCESS {
-			taskAllDone = false
+			mapTaskAllDone = false
 		}
 
 		if c.nameToStatusMap[name] == NOTSTARTED || c.nameToStatusMap[name] == FAIL {
 			taskAssigned = true
 			c.nameToStatusMap[name] = ASSIGNED
 			resp.TaskArg = task
+			resp.Type = MAPTASK
 			c.nameToLockMap[task.Task.Name].Unlock()
-			fmt.Printf("task %v is assigned\n", task.Task.ID)
+			fmt.Printf("map task %v is assigned\n", task.Task.ID)
 			break
 		}
 		c.nameToLockMap[task.Task.Name].Unlock()
 		resp.STATUS = TASKASSIGNED
 	}
 
-	if taskAllDone {
+	// TODO: merge this repeated code.
+	reduceTaskAllDone := true
+	if mapTaskAllDone {
+		for _, task := range c.reduceTasks {
+			name := task.Task.Name
+			c.nameToLockMap[name].Lock()
+			if c.nameToStatusMap[name] != SUCCESS {
+				reduceTaskAllDone = false
+			}
+			if c.nameToStatusMap[name] == NOTSTARTED || c.nameToStatusMap[name] == FAIL {
+				taskAssigned = true
+				c.nameToStatusMap[name] = ASSIGNED
+				resp.TaskArg = task
+				resp.Type = REDUCETASK
+				c.nameToLockMap[task.Task.Name].Unlock()
+				fmt.Printf("reduce task %v is assigned\n", task.Task.ID)
+				break
+			}
+			c.nameToLockMap[task.Task.Name].Unlock()
+			resp.STATUS = TASKASSIGNED
+		}
+	}
+
+	if mapTaskAllDone && reduceTaskAllDone {
 		resp.STATUS = TASKSALLDONE
 	} else if !taskAssigned {
 		resp.STATUS = TASKNOTREQDY
@@ -112,7 +136,7 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 	for i := 0; i < nReduce; i++ {
 		fileList := []string{}
 		for j := 0; j < len(files); j++ {
-			intermediateFileName := fmt.Sprintf("mr-%v-%v.txt", j, i)
+			intermediateFileName := fmt.Sprintf("mr-%v-%v.json", j, i)
 			fileList = append(fileList, intermediateFileName)
 		}
 		name := fmt.Sprintf("reduce-task-%v", i)

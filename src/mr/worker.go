@@ -10,6 +10,7 @@ import (
 	"net/rpc"
 	"os"
 	"sort"
+	"time"
 )
 
 //
@@ -32,6 +33,10 @@ type ByKey []KeyValue
 func (a ByKey) Len() int           { return len(a) }
 func (a ByKey) Swap(i, j int)      { a[i], a[j] = a[j], a[i] }
 func (a ByKey) Less(i, j int) bool { return a[i].Key < a[j].Key }
+
+const (
+	waitTime = 5 * time.Second
+)
 
 //
 // use ihash(key) % NReduce to choose the reduce
@@ -83,8 +88,12 @@ func Worker(mapf func(string, string) []KeyValue,
 		}
 		// TODO: let worker sleep when task not ready
 		if resp.STATUS == TASKSALLDONE {
-			fmt.Printf("All tasks finished. Exiting worker")
+			fmt.Printf("All tasks finished. Exiting worker\n")
 			return
+		} else if resp.STATUS == TASKNOTREQDY {
+			fmt.Printf("Waiting for task ready to process\n")
+			time.Sleep(waitTime)
+			continue
 		}
 
 		if resp.Type == MAPTASK {
@@ -95,12 +104,16 @@ func Worker(mapf func(string, string) []KeyValue,
 			}
 			err := handleMapTask(&arg, mapf)
 			if err != nil {
-
+				log.Fatalf("HandleMapTask(%v) error: %v", arg, err)
 			}
 		} else {
-			err := handleReduceTask(resp.TaskArg.(*ReduceTask), reducef)
+			arg, ok := resp.TaskArg.(ReduceTask)
+			if !ok {
+				log.Fatalf("Failed to convert reduce task arg!")
+			}
+			err := handleReduceTask(&arg, reducef)
 			if err != nil {
-
+				log.Fatalf("HandleReduceTask(%v) error: %v", arg, err)
 			}
 		}
 
@@ -108,6 +121,7 @@ func Worker(mapf func(string, string) []KeyValue,
 
 }
 
+// TODO: simplify the code
 func handleMapTask(task *MapTask, mapFunc func(string, string) []KeyValue) error {
 	fmt.Printf("start handling task : id: %v, filename: %v\n", task.Task.ID, task.FileName)
 	file, err := os.Open(task.FileName)
@@ -165,6 +179,7 @@ func handleMapTask(task *MapTask, mapFunc func(string, string) []KeyValue) error
 }
 
 func handleReduceTask(task *ReduceTask, reduceFunc func(string, []string) string) error {
+	fmt.Printf("Reduce task: %v\n", task)
 	return nil
 }
 
@@ -172,7 +187,6 @@ func handleReduceTask(task *ReduceTask, reduceFunc func(string, []string) string
 // send an RPC request to the coordinator, wait for the response.
 // usually returns true.
 // returns false if something goes wrong.
-// TODO: exit when coordinator exits
 func call(rpcname string, args interface{}, reply interface{}) bool {
 	// c, err := rpc.DialHTTP("tcp", "127.0.0.1"+":1234")
 	sockname := coordinatorSock()
