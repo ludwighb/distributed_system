@@ -3,12 +3,14 @@ package mr
 import (
 	"encoding/gob"
 	"encoding/json"
+	"flag"
 	"fmt"
 	"hash/fnv"
 	"io/ioutil"
 	"log"
 	"net/rpc"
 	"os"
+	"path/filepath"
 	"sort"
 	"time"
 )
@@ -27,15 +29,31 @@ type KeyValues struct {
 }
 
 // for sorting by key.
-type ByKey []KeyValue
+type KeyValueByKey []KeyValue
 
 // for sorting by key.
-func (a ByKey) Len() int           { return len(a) }
-func (a ByKey) Swap(i, j int)      { a[i], a[j] = a[j], a[i] }
-func (a ByKey) Less(i, j int) bool { return a[i].Key < a[j].Key }
+func (a KeyValueByKey) Len() int           { return len(a) }
+func (a KeyValueByKey) Swap(i, j int)      { a[i], a[j] = a[j], a[i] }
+func (a KeyValueByKey) Less(i, j int) bool { return a[i].Key < a[j].Key }
+
+type KeyReduce struct {
+	Key          string
+	ReducedValue string
+}
+
+type KeyReduceByKey []KeyReduce
+
+// for sorting by key.
+func (a KeyReduceByKey) Len() int           { return len(a) }
+func (a KeyReduceByKey) Swap(i, j int)      { a[i], a[j] = a[j], a[i] }
+func (a KeyReduceByKey) Less(i, j int) bool { return a[i].Key < a[j].Key }
 
 const (
 	waitTime = 5 * time.Second
+)
+
+var (
+	clearIntermediateFile = flag.Bool("clear_files", true, "clear intermediate files when worker exit.")
 )
 
 //
@@ -86,9 +104,15 @@ func Worker(mapf func(string, string) []KeyValue,
 		if !callSuccess {
 			log.Fatal("Failed to call coordinator")
 		}
-		// TODO: let worker sleep when task not ready
+		// TODO: use switch instead.
 		if resp.STATUS == TASKSALLDONE {
 			fmt.Printf("All tasks finished. Exiting worker\n")
+			if *clearIntermediateFile {
+				err := clearIntermediateFiles()
+				if err != nil {
+					log.Fatalf("Failed to clear intermediate files: %v", err)
+				}
+			}
 			return
 		} else if resp.STATUS == TASKNOTREQDY {
 			fmt.Printf("Waiting for task ready to process\n")
@@ -118,7 +142,22 @@ func Worker(mapf func(string, string) []KeyValue,
 		}
 
 	}
+}
 
+func clearIntermediateFiles() error {
+	files, err := filepath.Glob("./mr-*.json")
+	if err != nil {
+		return err
+	}
+
+	for _, file := range files {
+		err := os.Remove(file)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 // TODO: simplify the code
@@ -134,7 +173,7 @@ func handleMapTask(task *MapTask, mapFunc func(string, string) []KeyValue) error
 	}
 	file.Close()
 	keyValueArr := mapFunc(task.FileName, string(content))
-	sort.Sort(ByKey(keyValueArr))
+	sort.Sort(KeyValueByKey(keyValueArr))
 	sortedKeyVaules := groupByKey(keyValueArr)
 
 	intermediateFileNames := make([]string, task.Task.ReduceNum)
@@ -183,18 +222,66 @@ func handleReduceTask(task *ReduceTask, reduceFunc func(string, []string) string
 	// 1. read all content from all intermediate files
 	keyLists := map[string][]string{}
 	for _, file := range task.Files {
-		err := readFileIntoMap(file, &keyLists)
+		err := readFileIntoMap(file, keyLists)
 		if err != nil {
 			return fmt.Errorf("failed to read intermediate file %v: %v\n", file, err)
 		}
 	}
+
 	// 2. process all key , list in memory
+	keyReduces := []KeyReduce{}
+	for key, values := range keyLists {
+		keyReduces = append(keyReduces, KeyReduce{Key: key, ReducedValue: reduceFunc(key, values)})
+	}
 	// 3. content by key
+	sort.Sort(KeyReduceByKey(keyReduces))
 	// 4. write to output file
+	outputFile, err := os.Create(fmt.Sprintf("mr-out-%v", task.Task.ID))
+	if err != nil {
+		return err
+	}
+
+	for _, kr := range keyReduces {
+		fmt.Fprintf(outputFile, "%v %v\n", kr.Key, kr.ReducedValue)
+	}
+
+	req := &ChangeTaskStatusRequest{
+		Name:   task.Task.Name,
+		Status: SUCCESS,
+	}
+	callSuccess := call("Coordinator.ChangeTaskStatusHandler", req, &ChangeTaskStatusResponse{})
+	if !callSuccess {
+		return fmt.Errorf("Failed to call change task status!")
+	}
 	return nil
 }
 
-func readFileIntoMap(fileName string, keyListMap *map[string][]string) error {
+func readFileIntoMap(fileName string, keyListMap map[string][]string) error {
+	// Not all map task produce full range of intermediate files
+	_, err := os.Stat(fileName)
+	if err != nil {
+		fmt.Printf("file %v doesn't exit \n", fileName)
+		return nil
+	}
+
+	file, err := os.Open(fileName)
+	if err != nil {
+		return err
+	}
+	dec := json.NewDecoder(file)
+	kvs := []KeyValues{}
+	if err := dec.Decode(&kvs); err != nil {
+		return fmt.Errorf("failed to dedoce: %v\n", err)
+	}
+
+	for _, kv := range kvs {
+		if _, ok := keyListMap[kv.Key]; !ok {
+			keyListMap[kv.Key] = kv.Values
+		} else {
+			keyListMap[kv.Key] = append(keyListMap[kv.Key], kv.Values...)
+		}
+	}
+
 	return nil
 }
 
