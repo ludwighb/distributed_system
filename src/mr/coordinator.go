@@ -36,12 +36,12 @@ func (c *Coordinator) GetTaskHandler(req *GetTaskRequest, resp *GetTaskResponse)
 			c.nameToStatusMap[name] = ASSIGNED
 			resp.TaskArg = task
 			resp.Type = MAPTASK
+			resp.STATUS = TASKASSIGNED
 			c.nameToLockMap[task.Task.Name].Unlock()
 			fmt.Printf("map task %v is assigned\n", task.Task.ID)
-			break
+			return nil
 		}
 		c.nameToLockMap[task.Task.Name].Unlock()
-		resp.STATUS = TASKASSIGNED
 	}
 
 	// TODO: merge this repeated code.
@@ -58,12 +58,12 @@ func (c *Coordinator) GetTaskHandler(req *GetTaskRequest, resp *GetTaskResponse)
 				c.nameToStatusMap[name] = ASSIGNED
 				resp.TaskArg = task
 				resp.Type = REDUCETASK
+				resp.STATUS = TASKASSIGNED
 				c.nameToLockMap[task.Task.Name].Unlock()
 				fmt.Printf("reduce task %v is assigned\n", task.Task.ID)
-				break
+				return nil
 			}
 			c.nameToLockMap[task.Task.Name].Unlock()
-			resp.STATUS = TASKASSIGNED
 		}
 	}
 

@@ -123,7 +123,7 @@ func Worker(mapf func(string, string) []KeyValue,
 
 // TODO: simplify the code
 func handleMapTask(task *MapTask, mapFunc func(string, string) []KeyValue) error {
-	fmt.Printf("start handling task : id: %v, filename: %v\n", task.Task.ID, task.FileName)
+	fmt.Printf("start handling map task : id: %v, filename: %v\n", task.Task.ID, task.FileName)
 	file, err := os.Open(task.FileName)
 	if err != nil {
 		return fmt.Errorf("cannot open %v", task.FileName)
@@ -179,7 +179,22 @@ func handleMapTask(task *MapTask, mapFunc func(string, string) []KeyValue) error
 }
 
 func handleReduceTask(task *ReduceTask, reduceFunc func(string, []string) string) error {
-	fmt.Printf("Reduce task: %v\n", task)
+	fmt.Printf("start handling reduce task : id: %v, files: %v\n", task.Task.ID, task.Files)
+	// 1. read all content from all intermediate files
+	keyLists := map[string][]string{}
+	for _, file := range task.Files {
+		err := readFileIntoMap(file, &keyLists)
+		if err != nil {
+			return fmt.Errorf("failed to read intermediate file %v: %v\n", file, err)
+		}
+	}
+	// 2. process all key , list in memory
+	// 3. content by key
+	// 4. write to output file
+	return nil
+}
+
+func readFileIntoMap(fileName string, keyListMap *map[string][]string) error {
 	return nil
 }
 
