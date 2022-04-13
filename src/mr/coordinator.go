@@ -19,6 +19,10 @@ type Coordinator struct {
 	// TODO: double check if it's ok to use multiple locks for the same map.
 	nameToLockMap   map[string]*sync.Mutex
 	nameToStatusMap map[string]TaskStatus
+
+	// TODO: do i need a lock for this?
+	statusLock sync.Mutex
+	status     AllTaskStatus
 }
 
 func (c *Coordinator) GetTaskHandler(req *GetTaskRequest, resp *GetTaskResponse) error {
@@ -67,12 +71,15 @@ func (c *Coordinator) GetTaskHandler(req *GetTaskRequest, resp *GetTaskResponse)
 		}
 	}
 
+	// TODO: there are data race
+	c.statusLock.Lock()
 	if mapTaskAllDone && reduceTaskAllDone {
 		resp.STATUS = TASKSALLDONE
+		c.status = TASKSALLDONE
 	} else if !taskAssigned {
 		resp.STATUS = TASKNOTREQDY
 	}
-
+	c.statusLock.Unlock()
 	return nil
 }
 
@@ -106,8 +113,12 @@ func (c *Coordinator) server() {
 func (c *Coordinator) Done() bool {
 
 	// Your code here.
-	// TODO : double check this is right.
-	return len(c.mapTasks) == 0 && len(c.reduceTasks) == 0
+	var taskDone AllTaskStatus
+	c.statusLock.Lock()
+	taskDone = c.status
+	c.statusLock.Unlock()
+
+	return taskDone == TASKSALLDONE
 }
 
 //

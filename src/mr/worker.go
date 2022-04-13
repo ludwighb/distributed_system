@@ -87,10 +87,7 @@ func groupByKey(keyValueArr []KeyValue) []KeyValues {
 	return res
 }
 
-// T
-// Map task:
-// Reduce task:
-// Return status code when finished.
+// TODO: handle task fail when finished.
 func Worker(mapf func(string, string) []KeyValue,
 	reducef func(string, []string) string) {
 	// TODO: why need to register here?
