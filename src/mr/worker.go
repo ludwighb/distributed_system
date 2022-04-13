@@ -53,7 +53,7 @@ const (
 )
 
 var (
-	clearIntermediateFile = flag.Bool("clear_files", true, "clear intermediate files when worker exit.")
+	clearIntermediateFile = flag.Bool("clear_files", false, "clear intermediate files when worker exit.")
 )
 
 //
@@ -157,8 +157,29 @@ func clearIntermediateFiles() error {
 	return nil
 }
 
+// splitKeyValuesToIntermediateFiles reads the combined keyValues and spilt them into nReduce files
+// and return a map of intermediate file name to []KeyValues belong to that file.
+// it uses ihash(key)% to decide which reduce file to go.
+func splitKeyValuesToIntermediateFiles(kvs []*KeyValues, nReduce int, mapTaskID int) map[string][]*KeyValues {
+	intermediateFileContents := map[string][]*KeyValues{}
+
+	for _, kv := range kvs {
+		reduceTaskNum := ihash(kv.Key) % nReduce
+		intermediateFileName := fmt.Sprintf("mr-%v-%v.json", mapTaskID, reduceTaskNum)
+
+		if _, ok := intermediateFileContents[intermediateFileName]; !ok {
+			intermediateFileContents[intermediateFileName] = []*KeyValues{}
+		}
+
+		intermediateFileContents[intermediateFileName] = append(intermediateFileContents[intermediateFileName], kv)
+	}
+
+	return intermediateFileContents
+}
+
 // TODO: simplify the code
 func handleMapTask(task *MapTask, mapFunc func(string, string) []KeyValue) error {
+	// Opening file
 	fmt.Printf("start handling map task : id: %v, filename: %v\n", task.Task.ID, task.FileName)
 	file, err := os.Open(task.FileName)
 	if err != nil {
@@ -169,6 +190,8 @@ func handleMapTask(task *MapTask, mapFunc func(string, string) []KeyValue) error
 		return fmt.Errorf("cannot read %v", task.FileName)
 	}
 	file.Close()
+
+	// sort key and group values by key
 	keyValueArr := mapFunc(task.FileName, string(content))
 	sort.Sort(KeyValueByKey(keyValueArr))
 	sortedKeyVaules := groupByKey(keyValueArr)
@@ -178,6 +201,7 @@ func handleMapTask(task *MapTask, mapFunc func(string, string) []KeyValue) error
 	encoders := make([]*json.Encoder, task.Task.ReduceNum)
 	tempArr := make([][]*KeyValues, task.Task.ReduceNum)
 
+	// producing writing to intermediate files
 	for i := 0; i < task.Task.ReduceNum; i++ {
 		intermediateFileName := fmt.Sprintf("mr-%v-%v.json", task.Task.ID, ihash(sortedKeyVaules[i].Key)%task.Task.ReduceNum)
 		intermediateFileNames[i] = intermediateFileName
