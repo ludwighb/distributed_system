@@ -165,7 +165,9 @@ func splitKeyValuesToIntermediateFiles(kvs []*KeyValues, nReduce int, mapTaskID 
 
 	for _, kv := range kvs {
 		reduceTaskNum := ihash(kv.Key) % nReduce
+		// fmt.Printf("kv.key : %v\n", kv.Key)
 		intermediateFileName := fmt.Sprintf("mr-%v-%v.json", mapTaskID, reduceTaskNum)
+		// fmt.Printf("intermediate filename : %v\n", intermediateFileName)
 
 		if _, ok := intermediateFileContents[intermediateFileName]; !ok {
 			intermediateFileContents[intermediateFileName] = []*KeyValues{}
@@ -195,33 +197,26 @@ func handleMapTask(task *MapTask, mapFunc func(string, string) []KeyValue) error
 	keyValueArr := mapFunc(task.FileName, string(content))
 	sort.Sort(KeyValueByKey(keyValueArr))
 	sortedKeyVaules := groupByKey(keyValueArr)
+	sortedValuePointers := []*KeyValues{}
 
-	intermediateFileNames := make([]string, task.Task.ReduceNum)
-	files := make([]*os.File, task.Task.ReduceNum)
-	encoders := make([]*json.Encoder, task.Task.ReduceNum)
-	tempArr := make([][]*KeyValues, task.Task.ReduceNum)
+	for i := 0; i < len(sortedKeyVaules); i++ {
+		sortedValuePointers = append(sortedValuePointers, &sortedKeyVaules[i])
+	}
 
-	// producing writing to intermediate files
-	for i := 0; i < task.Task.ReduceNum; i++ {
-		intermediateFileName := fmt.Sprintf("mr-%v-%v.json", task.Task.ID, ihash(sortedKeyVaules[i].Key)%task.Task.ReduceNum)
-		intermediateFileNames[i] = intermediateFileName
-		f, err := os.Create(intermediateFileName)
+	intermediateFileContent := splitKeyValuesToIntermediateFiles(sortedValuePointers, task.Task.ReduceNum, task.Task.ID)
+
+	for fileName, content := range intermediateFileContent {
+		fmt.Printf("filename: %v\n", fileName)
+		f, err := os.Create(fileName)
 		if err != nil {
 			return fmt.Errorf("failed to create file %v: %v", f, err)
 		}
-		files[i] = file
-		encoders[i] = json.NewEncoder(f)
-		tempArr[i] = []*KeyValues{}
-	}
-
-	for i := 0; i < len(sortedKeyVaules); i++ {
-		hash := ihash(sortedKeyVaules[i].Key) % task.Task.ReduceNum
-		tempArr[hash] = append(tempArr[hash], &sortedKeyVaules[i])
-	}
-
-	for i := 0; i < task.Task.ReduceNum; i++ {
-		encoders[i].Encode(tempArr[i])
-		files[i].Close()
+		defer f.Close()
+		encoder := json.NewEncoder(f)
+		err = encoder.Encode(content)
+		if err != nil {
+			log.Fatalf("Faied to encode content %v into file %v: %v", content, fileName, err)
+		}
 	}
 
 	changeStatusReq := &ChangeTaskStatusRequest{
