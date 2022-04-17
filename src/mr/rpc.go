@@ -24,9 +24,9 @@ const (
 type AllTaskStatus int
 
 const (
-	TASKNOTREQDY AllTaskStatus = 0
-	TASKASSIGNED AllTaskStatus = 1
-	TASKSALLDONE AllTaskStatus = 2
+	TASKNOTREAQDY AllTaskStatus = 0
+	TASKASSIGNED  AllTaskStatus = 1
+	TASKSALLDONE  AllTaskStatus = 2
 )
 
 // TODO: this is empty, is
@@ -43,9 +43,12 @@ type ChangeTaskStatusResponse struct {
 }
 
 type Task struct {
-	Name      string
+	// string name for task. eg: map-1
+	Name string
+	// the ith map/or reduce task
 	ID        int
 	ReduceNum int
+	Status    TaskStatus
 }
 
 type GetTaskResponse struct {

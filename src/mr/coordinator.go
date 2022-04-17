@@ -8,91 +8,93 @@ import (
 	"net/http"
 	"net/rpc"
 	"os"
+	"strings"
 	"sync"
 )
 
 // TODO: Cahnge to just use one lock
 type Coordinator struct {
 	// Your definitions here.
-	mapTasks    []*MapTask
-	reduceTasks []*ReduceTask
-	// TODO: double check if it's ok to use multiple locks for the same map.
-	nameToLockMap   map[string]*sync.Mutex
-	nameToStatusMap map[string]TaskStatus
+	mapTasks      []*MapTask
+	reduceTasks   []*ReduceTask
+	nameToTaskMap map[string]interface{}
 
 	// TODO: do i need a lock for this?
-	statusLock sync.Mutex
-	status     AllTaskStatus
+	mu     sync.Mutex
+	status AllTaskStatus
 }
 
+// why only data race in map task?
 func (c *Coordinator) GetTaskHandler(req *GetTaskRequest, resp *GetTaskResponse) error {
 	taskAssigned := false
 	mapTaskAllDone := true
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	for _, task := range c.mapTasks {
-		name := task.Task.Name
-		c.nameToLockMap[name].Lock()
-		if c.nameToStatusMap[name] != SUCCESS {
+		// read
+		if task.Task.Status != SUCCESS {
 			mapTaskAllDone = false
 		}
 
-		if c.nameToStatusMap[name] == NOTSTARTED || c.nameToStatusMap[name] == FAIL {
+		if task.Task.Status == NOTSTARTED || task.Task.Status == FAIL {
 			taskAssigned = true
-			c.nameToStatusMap[name] = ASSIGNED
+			// write
+			// TODO: make sure this assigns to the correct value.
+			task.Task.Status = ASSIGNED
 			resp.TaskArg = task
 			resp.Type = MAPTASK
+			// TODO: do we need to pass status to WORKER?
 			resp.STATUS = TASKASSIGNED
-			c.nameToLockMap[task.Task.Name].Unlock()
 			fmt.Printf("map task %v is assigned\n", task.Task.ID)
 			return nil
 		}
-		c.nameToLockMap[task.Task.Name].Unlock()
 	}
 
 	// TODO: merge this repeated code.
 	reduceTaskAllDone := true
 	if mapTaskAllDone {
 		for _, task := range c.reduceTasks {
-			name := task.Task.Name
-			c.nameToLockMap[name].Lock()
-			if c.nameToStatusMap[name] != SUCCESS {
+			if task.Task.Status != SUCCESS {
 				reduceTaskAllDone = false
 			}
-			if c.nameToStatusMap[name] == NOTSTARTED || c.nameToStatusMap[name] == FAIL {
+			if task.Task.Status == NOTSTARTED || task.Task.Status == FAIL {
 				taskAssigned = true
-				c.nameToStatusMap[name] = ASSIGNED
+				task.Task.Status = ASSIGNED
 				resp.TaskArg = task
 				resp.Type = REDUCETASK
 				resp.STATUS = TASKASSIGNED
-				c.nameToLockMap[task.Task.Name].Unlock()
 				fmt.Printf("reduce task %v is assigned\n", task.Task.ID)
 				return nil
 			}
-			c.nameToLockMap[task.Task.Name].Unlock()
 		}
 	}
 
-	// TODO: there are data race
-	c.statusLock.Lock()
 	if mapTaskAllDone && reduceTaskAllDone {
 		resp.STATUS = TASKSALLDONE
 		c.status = TASKSALLDONE
 	} else if !taskAssigned {
-		resp.STATUS = TASKNOTREQDY
+		resp.STATUS = TASKNOTREAQDY
 	}
-	c.statusLock.Unlock()
 	return nil
 }
 
 func (c *Coordinator) ChangeTaskStatusHandler(req *ChangeTaskStatusRequest, resp *ChangeTaskStatusResponse) error {
-	c.nameToLockMap[req.Name].Lock()
-	c.nameToStatusMap[req.Name] = req.Status
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	task, ok := c.nameToTaskMap[req.Name]
+	if !ok {
+		return fmt.Errorf("couldn't find task name %v", req.Name)
+	}
+	if strings.Contains(req.Name, "map") {
+		task.(*MapTask).Task.Status = req.Status
+	} else {
+		task.(*ReduceTask).Task.Status = req.Status
+	}
 	fmt.Printf("Task %v status changed to %v\n", req.Name, req.Status)
-	c.nameToLockMap[req.Name].Unlock()
 	return nil
 }
 
 // start a thread that listens for RPCs from worker.go
-//
 func (c *Coordinator) server() {
 	rpc.Register(c)
 	rpc.HandleHTTP()
@@ -111,12 +113,11 @@ func (c *Coordinator) server() {
 // if the entire job has finished.
 //
 func (c *Coordinator) Done() bool {
-
 	// Your code here.
 	var taskDone AllTaskStatus
-	c.statusLock.Lock()
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	taskDone = c.status
-	c.statusLock.Unlock()
 
 	return taskDone == TASKSALLDONE
 }
@@ -129,19 +130,20 @@ func (c *Coordinator) Done() bool {
 func MakeCoordinator(files []string, nReduce int) *Coordinator {
 	mapTasks := []*MapTask{}
 	reduceTasks := []*ReduceTask{}
-	nameToLockMap := map[string]*sync.Mutex{}
-	nameToStatusMap := map[string]TaskStatus{}
+	nameToTaskMap := map[string]interface{}{}
 	for i, file := range files {
 		name := fmt.Sprintf("map-task-%v", i)
-		nameToLockMap[name] = &sync.Mutex{}
-		mapTasks = append(mapTasks, &MapTask{
+		mapTask := &MapTask{
 			FileName: file,
 			Task: &Task{
 				Name:      name,
 				ID:        i,
 				ReduceNum: nReduce,
+				Status:    NOTSTARTED,
 			},
-		})
+		}
+		mapTasks = append(mapTasks, mapTask)
+		nameToTaskMap[name] = mapTask
 	}
 
 	for i := 0; i < nReduce; i++ {
@@ -151,30 +153,29 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 			fileList = append(fileList, intermediateFileName)
 		}
 		name := fmt.Sprintf("reduce-task-%v", i)
-		nameToLockMap[name] = &sync.Mutex{}
 		reduceTask := &ReduceTask{
 			Files: fileList,
 			Task: &Task{
 				Name:      name,
 				ID:        i,
 				ReduceNum: nReduce,
+				Status:    NOTSTARTED,
 			},
 		}
 		reduceTasks = append(reduceTasks, reduceTask)
+		nameToTaskMap[name] = reduceTask
 	}
 
 	c := Coordinator{
-		mapTasks:        mapTasks,
-		reduceTasks:     reduceTasks,
-		nameToLockMap:   nameToLockMap,
-		nameToStatusMap: nameToStatusMap,
+		mapTasks:      mapTasks,
+		reduceTasks:   reduceTasks,
+		nameToTaskMap: nameToTaskMap,
 	}
 
 	gob.Register(MapTask{})
 	gob.Register(ReduceTask{})
 
 	// Your code here.
-
 	c.server()
 	return &c
 }

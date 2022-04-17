@@ -53,7 +53,7 @@ const (
 )
 
 var (
-	clearIntermediateFile = flag.Bool("clear_files", false, "clear intermediate files when worker exit.")
+	clearIntermediateFile = flag.Bool("clear_files", true, "clear intermediate files when worker exit.")
 )
 
 //
@@ -97,9 +97,9 @@ func Worker(mapf func(string, string) []KeyValue,
 	for true {
 		resp := &GetTaskResponse{}
 		callSuccess := call("Coordinator.GetTaskHandler", &GetTaskRequest{}, resp)
-		// TODO: wait if the task is not ready
 		if !callSuccess {
 			log.Fatal("Failed to call coordinator")
+			os.Exit(1)
 		}
 		// TODO: use switch instead.
 		if resp.STATUS == TASKSALLDONE {
@@ -111,8 +111,9 @@ func Worker(mapf func(string, string) []KeyValue,
 				}
 			}
 			return
-		} else if resp.STATUS == TASKNOTREQDY {
-			fmt.Printf("Waiting for task ready to process\n")
+		} else if resp.STATUS == TASKNOTREAQDY {
+			pid := os.Getegid()
+			fmt.Printf("Worker process %v waiting for task ready to process\n", pid)
 			time.Sleep(waitTime)
 			continue
 		}
@@ -165,9 +166,7 @@ func splitKeyValuesToIntermediateFiles(kvs []*KeyValues, nReduce int, mapTaskID 
 
 	for _, kv := range kvs {
 		reduceTaskNum := ihash(kv.Key) % nReduce
-		// fmt.Printf("kv.key : %v\n", kv.Key)
 		intermediateFileName := fmt.Sprintf("mr-%v-%v.json", mapTaskID, reduceTaskNum)
-		// fmt.Printf("intermediate filename : %v\n", intermediateFileName)
 
 		if _, ok := intermediateFileContents[intermediateFileName]; !ok {
 			intermediateFileContents[intermediateFileName] = []*KeyValues{}
@@ -206,7 +205,6 @@ func handleMapTask(task *MapTask, mapFunc func(string, string) []KeyValue) error
 	intermediateFileContent := splitKeyValuesToIntermediateFiles(sortedValuePointers, task.Task.ReduceNum, task.Task.ID)
 
 	for fileName, content := range intermediateFileContent {
-		fmt.Printf("filename: %v\n", fileName)
 		f, err := os.Create(fileName)
 		if err != nil {
 			return fmt.Errorf("failed to create file %v: %v", f, err)

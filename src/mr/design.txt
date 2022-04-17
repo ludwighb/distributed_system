@@ -1,7 +1,11 @@
-1. Map tasks: 
-    a. Assign just one map task to worker. 
-    b. assign all map task to worker.
-    c. handle concurrency and task failure. 
-    d. Assign just one reduce task to worker.
-    e. assign all reduce task to worker.
-    f. handle concurrency and task failure. 
+
+1. data race
+2. crash test
+3. early exit test. coordinator need to assume the worker is dead after waiting for 10 seconds. 
+
+
+To test crash recovery, you can use the mrapps/crash.go application plugin. It randomly exits in the Map and Reduce functions.
+
+To ensure that nobody observes partially written files in the presence of crashes, the MapReduce paper mentions the trick of using a temporary file and atomically renaming it once it is completely written. You can use ioutil.TempFile to create a temporary file and os.Rename to atomically rename it.
+
+test-mr-many.sh provides a bare-bones script for running test-mr.sh with a timeout (which is how we'll test your code). It takes as an argument the number of times to run the tests. You should not run several test-mr.sh instances in parallel because the coordinator will reuse the same socket, causing conflicts.
