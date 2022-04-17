@@ -10,37 +10,45 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"time"
 )
 
-// TODO: Cahnge to just use one lock
+// assume worker is dead after workerTimeTollerance and assign task to another worker
+const workerTimeTollerance = time.Second * 10
+
 type Coordinator struct {
 	// Your definitions here.
 	mapTasks      []*MapTask
 	reduceTasks   []*ReduceTask
 	nameToTaskMap map[string]interface{}
 
-	// TODO: do i need a lock for this?
 	mu     sync.Mutex
 	status AllTaskStatus
 }
 
-// why only data race in map task?
 func (c *Coordinator) GetTaskHandler(req *GetTaskRequest, resp *GetTaskResponse) error {
 	taskAssigned := false
 	mapTaskAllDone := true
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	for _, task := range c.mapTasks {
-		// read
 		if task.Task.Status != SUCCESS {
 			mapTaskAllDone = false
-		}
 
-		if task.Task.Status == NOTSTARTED || task.Task.Status == FAIL {
+			if task.Task.Status == ASSIGNED {
+				if task.Task.TaskAssignedTimestamp.IsZero() {
+					continue
+				}
+				workerProcessingTime := time.Now().Sub(task.Task.TaskAssignedTimestamp)
+				if workerProcessingTime < workerTimeTollerance {
+					continue
+				}
+			}
+
 			taskAssigned = true
-			// write
 			// TODO: make sure this assigns to the correct value.
 			task.Task.Status = ASSIGNED
+			task.Task.TaskAssignedTimestamp = time.Now()
 			resp.TaskArg = task
 			resp.Type = MAPTASK
 			// TODO: do we need to pass status to WORKER?
@@ -56,10 +64,18 @@ func (c *Coordinator) GetTaskHandler(req *GetTaskRequest, resp *GetTaskResponse)
 		for _, task := range c.reduceTasks {
 			if task.Task.Status != SUCCESS {
 				reduceTaskAllDone = false
-			}
-			if task.Task.Status == NOTSTARTED || task.Task.Status == FAIL {
+				if task.Task.Status == ASSIGNED {
+					if task.Task.TaskAssignedTimestamp.IsZero() {
+						continue
+					}
+					workerProcessingTime := time.Now().Sub(task.Task.TaskAssignedTimestamp)
+					if workerProcessingTime < workerTimeTollerance {
+						continue
+					}
+				}
 				taskAssigned = true
 				task.Task.Status = ASSIGNED
+				task.Task.TaskAssignedTimestamp = time.Now()
 				resp.TaskArg = task
 				resp.Type = REDUCETASK
 				resp.STATUS = TASKASSIGNED

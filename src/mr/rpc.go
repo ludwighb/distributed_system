@@ -3,6 +3,7 @@ package mr
 import (
 	"os"
 	"strconv"
+	"time"
 )
 
 type TaskStatus int
@@ -49,6 +50,9 @@ type Task struct {
 	ID        int
 	ReduceNum int
 	Status    TaskStatus
+	// TODO: put these files here for now, but need to move them to coordinator because worker doesn't need to know this
+	TaskAssignedTimestamp time.Time
+	AssignedWorkerId      int
 }
 
 type GetTaskResponse struct {

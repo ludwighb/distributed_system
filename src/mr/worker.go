@@ -112,7 +112,7 @@ func Worker(mapf func(string, string) []KeyValue,
 			}
 			return
 		} else if resp.STATUS == TASKNOTREAQDY {
-			pid := os.Getegid()
+			pid := os.Getpid()
 			fmt.Printf("Worker process %v waiting for task ready to process\n", pid)
 			time.Sleep(waitTime)
 			continue
