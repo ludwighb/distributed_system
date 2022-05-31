@@ -8,7 +8,8 @@ Leader Election:
 1. SendVoteRequest
 2. GetVoteRequest
 3. Test Initial Election. 
-4. Leader send heartbeat. 
+4. Leader send heartbeat, and non leader turns into follower
+5. Start new round of leader election when last round doesn't have an leader. 
 
 
 Caveat

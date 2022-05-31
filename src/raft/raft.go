@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"log"
 	"math/rand"
+	"reflect"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -55,9 +56,13 @@ type ApplyMsg struct {
 
 // TODO: keep it empty for now for 2a
 type AppendEntryRequest struct {
+	Term     int
+	LeaderID int
 }
 
 type AppendEntryResponse struct {
+	Term    int
+	Success bool
 }
 
 type RequestVoteRequest struct {
@@ -88,6 +93,7 @@ const (
 	// 2. do i have to change election timeout in every new term?
 	MIN_ELECTION_TIMEOUT = 150
 	MAX_ELECTION_TIMEOUT = 300
+	HEARTBEAT_INTERVAL   = 100 * time.Millisecond // 0.1 s
 )
 
 //
@@ -205,7 +211,7 @@ func (rf *Raft) Snapshot(index int, snapshot []byte) {
 //
 // example RequestVoteHandler RPC handler.
 //
-// TODO: if requester has different bigger terms than me, what should i do?
+// TODO: change term to req term and convert to follower if req's term > currentTerm.
 func (rf *Raft) RequestVoteHandler(req *RequestVoteRequest, resp *RequestVoteResponse) {
 	// fmt.Printf("Handle Request Vote")
 	resp.GrantVote = false
@@ -261,15 +267,29 @@ func (rf *Raft) sendRequestVote(server int, req *RequestVoteRequest, reply *Requ
 //
 // example RequestVoteHandler RPC handler.
 //
-func (rf *Raft) AppendEntryHandler(req *AppendEntryRequest, resp AppendEntryResponse) {
-	fmt.Printf("Handle Request Vote")
-	// Your code here (2A, 2B).
-}
+func (rf *Raft) AppendEntryHandler(req *AppendEntryRequest, resp *AppendEntryResponse) {
 
-func (rf *Raft) sendAppendEntry(server int, req *AppendEntryRequest, reply AppendEntryResponse) bool {
-	fmt.Printf("SendRequestVote")
-	ok := rf.peers[server].Call("Raft.AppendEntryHandler", req, reply)
-	return ok
+	// Your code here (2A, 2B).
+	heartbeat := &AppendEntryRequest{}
+	resp.Success = false
+	if reflect.DeepEqual(req, heartbeat) {
+		rf.mu.Lock()
+		defer rf.mu.Unlock()
+		resp.Term = rf.currentTerm
+		// the stale leader should then update term and convert to follower.
+		if rf.currentTerm > req.Term {
+			return
+		}
+
+		rf.lastHeartbeatTime = time.Now()
+
+		rf.currentTerm = req.Term
+		if rf.state == CANDIDATE {
+			rf.state = FOLLOWER
+			rf.votedFor = -1
+		}
+	}
+
 }
 
 //
@@ -320,14 +340,14 @@ func (rf *Raft) killed() bool {
 // The ticker go routine starts a new election if this peer hasn't received
 // heartsbeats recently.
 func (rf *Raft) ticker() {
-	fmt.Printf("me: %v\n", rf)
-	fmt.Printf("my election timeout: %v \n", rf.electionTimeout)
+	// fmt.Printf("me: %v\n", rf)
+	// fmt.Printf("my election timeout: %v \n", rf.electionTimeout)
 	for rf.killed() == false {
 		// TODO: should i lock everytime? I don't think
 		var currentState RaftState
 		var currentTerm int
 		var votedFor int
-		// TODO: panic
+
 		rf.mu.Lock()
 		currentState = rf.state
 		currentTerm = rf.currentTerm
@@ -337,6 +357,17 @@ func (rf *Raft) ticker() {
 		switch currentState {
 		case LEADER:
 			//fmt.Printf("Im server %v and im leader ! \n", rf.me)
+			// Send heartbeats to all followers an candidate.
+			for server, rpcClient := range rf.peers {
+				if server == rf.me {
+					continue
+				}
+				req := &AppendEntryRequest{}
+				resp := &AppendEntryResponse{}
+				rpcClient.Call("Raft.AppendEntryHandler", req, resp)
+			}
+
+			time.Sleep(HEARTBEAT_INTERVAL)
 		case FOLLOWER:
 			now := time.Now()
 			time.Sleep(rf.electionTimeout)
@@ -346,7 +377,7 @@ func (rf *Raft) ticker() {
 				rf.state = CANDIDATE
 				rf.currentTerm++
 				currentTerm = rf.currentTerm
-				fmt.Printf("im peer %v and i turned into candidate! \n", rf.me)
+				// fmt.Printf("im peer %v and i turned into candidate! \n", rf.me)
 				rf.mu.Unlock()
 				req := &RequestVoteRequest{
 					Term:        currentTerm,
@@ -373,7 +404,7 @@ func (rf *Raft) ticker() {
 				rpcClient.Call("Raft.RequestVoteHandler", req, resp)
 				voteResponses = append(voteResponses, resp)
 			}
-
+			// TODO: change term to req term and convert to follower if resp's term > currentTerm.
 			votes := 0
 			for _, resp := range voteResponses {
 				// return to follower if the reponse's term is bigger than this peer's current term.
