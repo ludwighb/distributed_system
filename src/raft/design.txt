@@ -1,0 +1,16 @@
+Fill in the RequestVoteArgs and RequestVoteReply structs. Modify Make() to create a background goroutine that will kick off leader election periodically by sending out RequestVote 
+RPCs when it hasn't heard from another peer for a while. This way a peer will learn who is the leader, if there is already a leader, or become the leader itself. 
+Implement the RequestVote() RPC handler so that servers will vote for one another.
+
+
+Leader Election: 
+
+1. SendVoteRequest
+2. GetVoteRequest
+3. Test Initial Election. 
+4. Leader send heartbeat. 
+
+
+Caveat
+1. heartbeat < 0.1 times/seconds
+2. new leader choosen < 5 seconds
