@@ -95,8 +95,8 @@ const (
 const (
 	// TODO: 1. change the timeout to pass the lab test
 	// 2. do i have to change election timeout in every new term?
-	MIN_ELECTION_TIMEOUT = 150
-	MAX_ELECTION_TIMEOUT = 300
+	MIN_ELECTION_TIMEOUT = 500
+	MAX_ELECTION_TIMEOUT = 1000
 	HEARTBEAT_INTERVAL   = 100 * time.Millisecond // 0.1 s
 )
 
@@ -220,10 +220,20 @@ func (rf *Raft) RequestVoteHandler(req *RequestVoteRequest, resp *RequestVoteRes
 	// fmt.Printf("Handle Request Vote")
 	resp.GrantVote = false
 	rf.mu.Lock()
-	// defer rf.mu.Unlock()
+	defer rf.mu.Unlock()
 	resp.Term = rf.currentTerm
+
+	// the peer that send request is out of date and need to update term.
 	if req.Term < rf.currentTerm {
-		rf.mu.Unlock()
+		fmt.Printf("Peer %v outdated, new term: %v, peer term: %v\n ", req.CandidateID, rf.currentTerm, req.Term)
+		return
+	}
+
+	// TODO: should i skip voting or vote imediately vote for this round?
+	if req.Term > rf.currentTerm {
+		rf.state = FOLLOWER
+		rf.currentTerm = req.Term
+		rf.votedFor = -1
 		return
 	}
 
@@ -231,7 +241,6 @@ func (rf *Raft) RequestVoteHandler(req *RequestVoteRequest, resp *RequestVoteRes
 		resp.GrantVote = true
 		rf.votedFor = req.CandidateID
 	}
-	rf.mu.Unlock()
 	// Your code here (2A, 2B).
 }
 
@@ -274,8 +283,8 @@ func (rf *Raft) sendRequestVote(server int, req *RequestVoteRequest, reply *Requ
 // example RequestVoteHandler RPC handler.
 //
 func (rf *Raft) AppendEntryHandler(req *AppendEntryRequest, resp *AppendEntryResponse) {
-
 	// Your code here (2A, 2B).
+	fmt.Printf("im peer %v and i got heartbeeat from %v\n", rf.me, req.LeaderID)
 	heartbeat := &AppendEntryRequest{}
 	resp.Success = false
 	// An empty logEntry is a heartbeat
@@ -291,11 +300,13 @@ func (rf *Raft) AppendEntryHandler(req *AppendEntryRequest, resp *AppendEntryRes
 
 		rf.lastHeartbeatTime = time.Now()
 
-		rf.currentTerm = req.Term
-		if rf.state == CANDIDATE {
+		// This peer is out of date. Update term and turn into follower.
+		// TODO: later the catch up logci may be here.
+		if rf.currentTerm < req.Term {
 			fmt.Printf("im peer %v and im converting to follower. term: %v\n", rf.me, rf.currentTerm)
 			rf.state = FOLLOWER
 			rf.votedFor = -1
+			rf.currentTerm = req.Term
 		}
 	}
 
@@ -367,20 +378,34 @@ func (rf *Raft) ticker() {
 		case LEADER:
 			//fmt.Printf("Im server %v and im leader ! \n", rf.me)
 			// Send heartbeats to all followers an candidate.
-			for server, rpcClient := range rf.peers {
-				if server == rf.me {
-					continue
+			leaderUpdated := true
+			for leaderUpdated {
+				for server, rpcClient := range rf.peers {
+					if server == rf.me {
+						continue
+					}
+					req := &AppendEntryRequest{
+						Term:     currentTerm,
+						LeaderID: rf.me,
+						Data:     nil,
+					}
+					resp := &AppendEntryResponse{}
+					rpcClient.Call("Raft.AppendEntryHandler", req, resp)
+					// This means "me" is a stale leader, turns into a follower.
+					if resp.Term > currentTerm {
+						rf.mu.Lock()
+						defer rf.mu.Unlock()
+						rf.currentTerm = resp.Term
+						rf.state = FOLLOWER
+						rf.votedFor = -1
+						leaderUpdated = false
+						break
+					}
 				}
-				req := &AppendEntryRequest{
-					Term:     currentTerm,
-					LeaderID: rf.me,
-					Data:     nil,
-				}
-				resp := &AppendEntryResponse{}
-				rpcClient.Call("Raft.AppendEntryHandler", req, resp)
+
+				time.Sleep(HEARTBEAT_INTERVAL)
 			}
 
-			time.Sleep(HEARTBEAT_INTERVAL)
 		case FOLLOWER:
 			now := time.Now()
 			// fmt.Printf("peer %v going to sleep for election time out %v\n", rf.me, rf.electionTimeout)
@@ -418,21 +443,27 @@ func (rf *Raft) ticker() {
 				rpcClient.Call("Raft.RequestVoteHandler", req, resp)
 				voteResponses = append(voteResponses, resp)
 			}
-			// TODO: change term to req term and convert to follower if resp's term > currentTerm.
 			votes := 0
+			isOutdated := false
 			for _, resp := range voteResponses {
-				// return to follower if the reponse's term is bigger than this peer's current term.
+				// return to follower if the response's term is bigger than this peer's current term.
 				if resp.Term > currentTerm {
 					rf.mu.Lock()
 					rf.currentTerm = resp.Term
 					rf.state = FOLLOWER
+					rf.votedFor = -1
 					rf.mu.Unlock()
 					// TODO: double check if it's continue here.
-					continue
+					isOutdated = true
+					break
 				}
 				if resp.GrantVote {
 					votes++
 				}
+			}
+
+			if isOutdated {
+				continue
 			}
 
 			if votedFor == rf.me {
