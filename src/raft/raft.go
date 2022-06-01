@@ -216,8 +216,10 @@ func (rf *Raft) RequestVoteHandler(req *RequestVoteRequest, resp *RequestVoteRes
 	// fmt.Printf("Handle Request Vote")
 	resp.GrantVote = false
 	rf.mu.Lock()
+	// defer rf.mu.Unlock()
 	resp.Term = rf.currentTerm
 	if req.Term < rf.currentTerm {
+		rf.mu.Unlock()
 		return
 	}
 
@@ -370,22 +372,23 @@ func (rf *Raft) ticker() {
 			time.Sleep(HEARTBEAT_INTERVAL)
 		case FOLLOWER:
 			now := time.Now()
+			// fmt.Printf("peer %v going to sleep for election time out %v\n", rf.me, rf.electionTimeout)
 			time.Sleep(rf.electionTimeout)
+			rf.mu.Lock()
 
 			if rf.lastHeartbeatTime.Before(now) {
-				rf.mu.Lock()
+				fmt.Printf("peer %v, Last heart beet: %v, now: %v\n", rf.me, rf.lastHeartbeatTime, now)
+
 				rf.state = CANDIDATE
 				rf.currentTerm++
 				currentTerm = rf.currentTerm
-				// fmt.Printf("im peer %v and i turned into candidate! \n", rf.me)
-				rf.mu.Unlock()
-				req := &RequestVoteRequest{
-					Term:        currentTerm,
-					CandidateID: rf.me,
+				// TODO: Can't send Vote Request, since that needs to lock the mu, which is already locked above.
+				// May need a better way to vote for self.
+				if rf.votedFor == -1 {
+					rf.votedFor = rf.me
 				}
-				resp := &RequestVoteResponse{}
-				rf.peers[rf.me].Call("Raft.RequestVoteHandler", req, resp)
 			}
+			rf.mu.Unlock()
 
 		case CANDIDATE:
 			// TODO: only start one round of vote now.
@@ -428,6 +431,7 @@ func (rf *Raft) ticker() {
 
 			if votes >= (len(rf.peers)/2 + 1) {
 				rf.mu.Lock()
+				fmt.Printf("peer %v becomes leader, term: %v\n", rf.me, currentTerm)
 				rf.state = LEADER
 				rf.votedFor = -1
 				rf.mu.Unlock()
@@ -475,6 +479,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.votedFor = -1
 	rf.state = FOLLOWER
 	rf.electionTimeout = getElectionTimeout()
+	rf.lastHeartbeatTime = time.Now()
 
 	// Your initialization code here (2A, 2B, 2C).
 
