@@ -55,9 +55,13 @@ type ApplyMsg struct {
 }
 
 // TODO: keep it empty for now for 2a
+type Data struct {
+}
+
 type AppendEntryRequest struct {
 	Term     int
 	LeaderID int
+	Data     *Data
 }
 
 type AppendEntryResponse struct {
@@ -274,11 +278,13 @@ func (rf *Raft) AppendEntryHandler(req *AppendEntryRequest, resp *AppendEntryRes
 	// Your code here (2A, 2B).
 	heartbeat := &AppendEntryRequest{}
 	resp.Success = false
+	// An empty logEntry is a heartbeat
 	if reflect.DeepEqual(req, heartbeat) {
 		rf.mu.Lock()
 		defer rf.mu.Unlock()
 		resp.Term = rf.currentTerm
 		// the stale leader should then update term and convert to follower.
+		// TODO: handle this in stale leader.
 		if rf.currentTerm > req.Term {
 			return
 		}
@@ -287,6 +293,7 @@ func (rf *Raft) AppendEntryHandler(req *AppendEntryRequest, resp *AppendEntryRes
 
 		rf.currentTerm = req.Term
 		if rf.state == CANDIDATE {
+			fmt.Printf("im peer %v and im converting to follower. term: %v\n", rf.me, rf.currentTerm)
 			rf.state = FOLLOWER
 			rf.votedFor = -1
 		}
@@ -364,7 +371,11 @@ func (rf *Raft) ticker() {
 				if server == rf.me {
 					continue
 				}
-				req := &AppendEntryRequest{}
+				req := &AppendEntryRequest{
+					Term:     currentTerm,
+					LeaderID: rf.me,
+					Data:     nil,
+				}
 				resp := &AppendEntryResponse{}
 				rpcClient.Call("Raft.AppendEntryHandler", req, resp)
 			}
