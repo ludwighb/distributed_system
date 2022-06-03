@@ -22,7 +22,6 @@ import (
 	"fmt"
 	"log"
 	"math/rand"
-	"reflect"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -95,8 +94,8 @@ const (
 const (
 	// TODO: 1. change the timeout to pass the lab test
 	// 2. do i have to change election timeout in every new term?
-	MIN_ELECTION_TIMEOUT = 500
-	MAX_ELECTION_TIMEOUT = 1000
+	MIN_ELECTION_TIMEOUT = 300
+	MAX_ELECTION_TIMEOUT = 500
 	HEARTBEAT_INTERVAL   = 100 * time.Millisecond // 0.1 s
 )
 
@@ -285,11 +284,10 @@ func (rf *Raft) sendRequestVote(server int, req *RequestVoteRequest, reply *Requ
 //
 func (rf *Raft) AppendEntryHandler(req *AppendEntryRequest, resp *AppendEntryResponse) {
 	// Your code here (2A, 2B).
-	// fmt.Printf("im peer %v and i got heartbeeat from %v\n", rf.me, req.LeaderID)
-	heartbeat := &AppendEntryRequest{}
+	fmt.Printf("im peer %v and i got heartbeeat from %v, term : %v \n", rf.me, req.LeaderID, req.Term)
 	resp.Success = false
 	// An empty logEntry is a heartbeat
-	if reflect.DeepEqual(req, heartbeat) {
+	if req.Data == nil {
 		rf.mu.Lock()
 		defer rf.mu.Unlock()
 		resp.Term = rf.currentTerm
@@ -350,6 +348,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 //
 func (rf *Raft) Kill() {
 	atomic.StoreInt32(&rf.dead, 1)
+	fmt.Printf("peer %v is killed \n", rf.me)
 	// Your code here, if desired.
 }
 
@@ -488,6 +487,14 @@ func (rf *Raft) ticker() {
 					// Already vote itself when turn into follower.
 					votes++
 				}
+
+				// alivePeers := 0
+				// for server, peer := range rf.peers {
+				// 	if server == rf.me{
+				// 		continue
+				// 	}
+				// 	if peer.
+				// }
 
 				if votes >= (len(rf.peers)/2 + 1) {
 					rf.mu.Lock()
