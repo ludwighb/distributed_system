@@ -429,54 +429,73 @@ func (rf *Raft) ticker() {
 		case CANDIDATE:
 			// TODO: only start one round of vote now.
 			// fmt.Printf("peer %v is candidate now \n", rf.me)
-			var voteResponses []*RequestVoteResponse
-			for server, rpcClient := range rf.peers {
-				if server == rf.me {
-					continue
-				}
-				req := &RequestVoteRequest{
-					Term:        currentTerm,
-					CandidateID: rf.me,
-					// TODO: add last log index here to check if the candidate's logs are update to date.
-				}
-				resp := &RequestVoteResponse{}
-				rpcClient.Call("Raft.RequestVoteHandler", req, resp)
-				voteResponses = append(voteResponses, resp)
-			}
-			votes := 0
-			isOutdated := false
-			for _, resp := range voteResponses {
-				// return to follower if the response's term is bigger than this peer's current term.
-				if resp.Term > currentTerm {
+			for {
+				var voteResponses []*RequestVoteResponse
+				voteComplete := make(chan string, 1)
+
+				// start a gorountine to send votes and wait for rpc.
+				go func() {
+					for server, rpcClient := range rf.peers {
+						if server == rf.me {
+							continue
+						}
+						req := &RequestVoteRequest{
+							Term:        currentTerm,
+							CandidateID: rf.me,
+							// TODO: add last log index here to check if the candidate's logs are update to date.
+						}
+						resp := &RequestVoteResponse{}
+						rpcClient.Call("Raft.RequestVoteHandler", req, resp)
+						voteResponses = append(voteResponses, resp)
+						// TODO: it may be a little optimized if i check if vote is outdated here.
+					}
+					voteComplete <- "Complete"
+				}()
+
+				select {
+				// start next round of rounding
+				case <-time.After(rf.electionTimeout):
 					rf.mu.Lock()
-					rf.currentTerm = resp.Term
-					rf.state = FOLLOWER
-					rf.votedFor = -1
+					rf.currentTerm++
+					// TODO: double check I should vote for myeself here.
+					rf.votedFor = rf.me
 					rf.mu.Unlock()
-					// TODO: double check if it's continue here.
-					isOutdated = true
-					break
+
+				case <-voteComplete:
+					votes := 0
+					outdated := false
+					for _, resp := range voteResponses {
+						if resp.Term > currentTerm {
+							rf.mu.Lock()
+							defer rf.mu.Unlock()
+							rf.currentTerm = resp.Term
+							rf.votedFor = -1
+							rf.state = FOLLOWER
+							break
+						}
+
+						if resp.GrantVote {
+							votes++
+						}
+					}
+
+					if outdated {
+						break
+					}
+
+					if votedFor == rf.me {
+						// Already vote itself when turn into follower.
+						votes++
+					}
+
+					if votes >= (len(rf.peers)/2 + 1) {
+						rf.mu.Lock()
+						fmt.Printf("peer %v becomes leader, term: %v\n", rf.me, currentTerm)
+						rf.state = LEADER
+						rf.votedFor = -1
+						rf.mu.Unlock()
+					}
 				}
-				if resp.GrantVote {
-					votes++
-				}
-			}
-
-			if isOutdated {
-				continue
-			}
-
-			if votedFor == rf.me {
-				// Already vote itself when turn into follower.
-				votes++
-			}
-
-			if votes >= (len(rf.peers)/2 + 1) {
-				rf.mu.Lock()
-				fmt.Printf("peer %v becomes leader, term: %v\n", rf.me, currentTerm)
-				rf.state = LEADER
-				rf.votedFor = -1
-				rf.mu.Unlock()
 			}
 
 			// TODO: start next round of votes.
@@ -484,18 +503,6 @@ func (rf *Raft) ticker() {
 		default:
 			log.Fatalf("Invalid state")
 		}
-		// Your code here to check if a leader election should
-		// be started and to randomize sleeping time using
-		// time.Sleep().
-
-		// leader : send heartbeat
-
-		// follower: listen to heartbeat
-		// start election time out. If havent got heart beat within timeout, turn into candidate.
-
-		// candidate: startvote.
-		// ++ term
-		// send votes to all candidate , sleep for election timeout. If
 	}
 }
 
