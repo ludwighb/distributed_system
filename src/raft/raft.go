@@ -104,6 +104,7 @@ const (
 // A Go object implementing a single Raft peer.
 //
 type Raft struct {
+	// TODO: group locked data together in a struct and put mu there.
 	mu    sync.Mutex          // Lock to protect shared access to this peer's state
 	peers []*labrpc.ClientEnd // RPC end points of all peers
 	// Wha does this field do?
@@ -284,7 +285,7 @@ func (rf *Raft) sendRequestVote(server int, req *RequestVoteRequest, reply *Requ
 //
 func (rf *Raft) AppendEntryHandler(req *AppendEntryRequest, resp *AppendEntryResponse) {
 	// Your code here (2A, 2B).
-	fmt.Printf("im peer %v and i got heartbeeat from %v\n", rf.me, req.LeaderID)
+	// fmt.Printf("im peer %v and i got heartbeeat from %v\n", rf.me, req.LeaderID)
 	heartbeat := &AppendEntryRequest{}
 	resp.Success = false
 	// An empty logEntry is a heartbeat
@@ -378,8 +379,8 @@ func (rf *Raft) ticker() {
 		case LEADER:
 			//fmt.Printf("Im server %v and im leader ! \n", rf.me)
 			// Send heartbeats to all followers an candidate.
-			leaderUpdated := true
-			for leaderUpdated {
+			leaderUpToDate := true
+			for leaderUpToDate {
 				for server, rpcClient := range rf.peers {
 					if server == rf.me {
 						continue
@@ -398,7 +399,7 @@ func (rf *Raft) ticker() {
 						rf.currentTerm = resp.Term
 						rf.state = FOLLOWER
 						rf.votedFor = -1
-						leaderUpdated = false
+						leaderUpToDate = false
 						break
 					}
 				}
@@ -429,72 +430,71 @@ func (rf *Raft) ticker() {
 		case CANDIDATE:
 			// TODO: only start one round of vote now.
 			// fmt.Printf("peer %v is candidate now \n", rf.me)
-			for {
-				var voteResponses []*RequestVoteResponse
-				voteComplete := make(chan string, 1)
+			var voteResponses []*RequestVoteResponse
+			voteComplete := make(chan string, 1)
 
-				// start a gorountine to send votes and wait for rpc.
-				go func() {
-					for server, rpcClient := range rf.peers {
-						if server == rf.me {
-							continue
-						}
-						req := &RequestVoteRequest{
-							Term:        currentTerm,
-							CandidateID: rf.me,
-							// TODO: add last log index here to check if the candidate's logs are update to date.
-						}
-						resp := &RequestVoteResponse{}
-						rpcClient.Call("Raft.RequestVoteHandler", req, resp)
-						voteResponses = append(voteResponses, resp)
-						// TODO: it may be a little optimized if i check if vote is outdated here.
+			// start a gorountine to send votes and wait for rpc.
+			go func() {
+				for server, rpcClient := range rf.peers {
+					if server == rf.me {
+						continue
 					}
-					voteComplete <- "Complete"
-				}()
-
-				select {
-				// start next round of rounding
-				case <-time.After(rf.electionTimeout):
-					rf.mu.Lock()
-					rf.currentTerm++
-					// TODO: double check I should vote for myeself here.
-					rf.votedFor = rf.me
-					rf.mu.Unlock()
-
-				case <-voteComplete:
-					votes := 0
-					outdated := false
-					for _, resp := range voteResponses {
-						if resp.Term > currentTerm {
-							rf.mu.Lock()
-							defer rf.mu.Unlock()
-							rf.currentTerm = resp.Term
-							rf.votedFor = -1
-							rf.state = FOLLOWER
-							break
-						}
-
-						if resp.GrantVote {
-							votes++
-						}
+					req := &RequestVoteRequest{
+						Term:        currentTerm,
+						CandidateID: rf.me,
+						// TODO: add last log index here to check if the candidate's logs are update to date.
 					}
+					resp := &RequestVoteResponse{}
+					rpcClient.Call("Raft.RequestVoteHandler", req, resp)
+					voteResponses = append(voteResponses, resp)
+					// TODO: it may be a little optimized if i check if vote is outdated here.
+				}
+				voteComplete <- "Complete"
+			}()
 
-					if outdated {
+			select {
+			// start next round of rounding
+			case <-time.After(rf.electionTimeout):
+				rf.mu.Lock()
+				rf.currentTerm++
+				// TODO: double check I should vote for myeself here.
+				rf.votedFor = rf.me
+				rf.mu.Unlock()
+
+			case <-voteComplete:
+				votes := 0
+				outdated := false
+				for _, resp := range voteResponses {
+					if resp.Term > currentTerm {
+						fmt.Printf("candidate %v outdated, my term: %v, new term: %v\n", rf.me, currentTerm, resp.Term)
+						rf.mu.Lock()
+						defer rf.mu.Unlock()
+						rf.currentTerm = resp.Term
+						rf.votedFor = -1
+						rf.state = FOLLOWER
 						break
 					}
 
-					if votedFor == rf.me {
-						// Already vote itself when turn into follower.
+					if resp.GrantVote {
 						votes++
 					}
+				}
 
-					if votes >= (len(rf.peers)/2 + 1) {
-						rf.mu.Lock()
-						fmt.Printf("peer %v becomes leader, term: %v\n", rf.me, currentTerm)
-						rf.state = LEADER
-						rf.votedFor = -1
-						rf.mu.Unlock()
-					}
+				if outdated {
+					break
+				}
+
+				if votedFor == rf.me {
+					// Already vote itself when turn into follower.
+					votes++
+				}
+
+				if votes >= (len(rf.peers)/2 + 1) {
+					rf.mu.Lock()
+					fmt.Printf("peer %v becomes leader, term: %v\n", rf.me, currentTerm)
+					rf.state = LEADER
+					rf.votedFor = -1
+					rf.mu.Unlock()
 				}
 			}
 
