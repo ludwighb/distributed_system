@@ -151,13 +151,14 @@ func (rf *Raft) GetState() (int, bool) {
 	// Your code here (2A).
 	// TODO: confirm whether an uninitialized array is nil.
 	rf.mu.Lock()
+	defer rf.mu.Unlock()
 	if rf.state == LEADER {
 		isleader = true
 	} else {
 		isleader = false
 	}
 	term = rf.currentTerm
-	rf.mu.Unlock()
+
 	return term, isleader
 }
 
@@ -224,8 +225,6 @@ func (rf *Raft) Snapshot(index int, snapshot []byte) {
 //
 // TODO: change term to req term and convert to follower if req's term > currentTerm.
 func (rf *Raft) RequestVoteHandler(req *RequestVoteRequest, resp *RequestVoteResponse) {
-	fmt.Print("request vote\n")
-	// fmt.Printf("Handle Request Vote")
 	resp.GrantVote = false
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
@@ -371,7 +370,6 @@ func (rf *Raft) ticker() {
 	// fmt.Printf("me: %v\n", rf)
 	// fmt.Printf("my election timeout: %v \n", rf.electionTimeout)
 	for rf.killed() == false {
-		// TODO: should i lock everytime? I don't think
 		var currentState RaftState
 		var currentTerm int
 		var votedFor int
@@ -384,33 +382,39 @@ func (rf *Raft) ticker() {
 
 		switch currentState {
 		case LEADER:
-
 			// fmt.Printf("Im server %v and im leader ! \n", rf.me)
-			var wg sync.WaitGroup
+			cond := sync.NewCond(&rf.mu)
 			for server, client := range rf.peers {
 				if server == rf.me {
 					continue
 				}
-				wg.Add(1)
 				go func(client *labrpc.ClientEnd) {
-					req := &AppendEntryRequest{
-						Term:     currentTerm,
-						LeaderID: rf.me,
-						Data:     nil,
+					for true {
+						req := &AppendEntryRequest{
+							Term:     currentTerm,
+							LeaderID: rf.me,
+							Data:     nil,
+						}
+						resp := &AppendEntryResponse{}
+						client.Call("Raft.AppendEntryHandler", req, resp)
+						// This means "me" is a stale leader, turns into a follower.
+						if resp.Term > currentTerm {
+							rf.mu.Lock()
+							rf.convertToState(FOLLOWER, resp.Term)
+							rf.mu.Unlock()
+							break
+						}
+						time.Sleep(HEARTBEAT_INTERVAL)
 					}
-					resp := &AppendEntryResponse{}
-					client.Call("Raft.AppendEntryHandler", req, resp)
-					// This means "me" is a stale leader, turns into a follower.
-					if resp.Term > currentTerm {
-						rf.mu.Lock()
-						rf.convertToState(FOLLOWER, resp.Term)
-						rf.mu.Unlock()
-					}
-					wg.Done()
+
 				}(client)
 			}
-			wg.Wait()
-			time.Sleep(HEARTBEAT_INTERVAL)
+
+			rf.mu.Lock()
+			for rf.state == LEADER {
+				cond.Wait()
+			}
+			rf.mu.Unlock()
 
 		case FOLLOWER:
 			now := time.Now()
@@ -462,9 +466,18 @@ func (rf *Raft) ticker() {
 						// TODO: add last log index here to check if the candidate's logs are update to date.
 					}
 					resp := &RequestVoteResponse{}
-					client.Call("Raft.RequestVoteHandler", req, resp)
+					ok := client.Call("Raft.RequestVoteHandler", req, resp)
+					if !ok {
+						return
+					}
 					rf.mu.Lock()
 					defer rf.mu.Unlock()
+
+					// this peer already won the election, so don't need to proceed.
+					if rf.state == LEADER {
+						return
+					}
+
 					if resp.Term > currentTerm {
 						rf.convertToState(FOLLOWER, resp.Term)
 						return
@@ -481,46 +494,6 @@ func (rf *Raft) ticker() {
 					cond.Broadcast()
 				}(client)
 			}
-
-			// TODO: im waiting for rpc responses to update time. Need to change to have a timing on myself
-			// rf.mu.Lock()
-			// // for votes < len(rf.peers)/2+1 && responses < len(rf.peers)-1 && voteTimeSpent < rf.electionTimeout && latestTerm < currentTerm {
-			// // 	fmt.Printf("peer %v got %v vote %v response \n", rf.me, votes, responses)
-			// // 	cond.Wait()
-			// // }
-
-			// // TODO: check whether im still candidate.
-			// for votes < len(rf.peers)/2+1 && responses < len(rf.peers)-1 && latestTerm < currentTerm {
-			// 	fmt.Printf("peer %v got %v vote %v response \n", rf.me, votes, responses)
-			// 	cond.Wait()
-			// }
-
-			// if latestTerm > currentTerm {
-			// 	fmt.Printf("peer %v is outdated candidate! new term: %v\n", rf.me, currentTerm)
-			// 	rf.mu.Lock()
-			// 	defer rf.mu.Unlock()
-			// 	rf.currentTerm = latestTerm
-			// 	rf.votedFor = -1
-			// 	rf.lastHeartbeatTime = time.Now()
-			// 	rf.state = FOLLOWER
-			// } else if votes >= len(rf.peers)/2+1 {
-			// 	rf.mu.Lock()
-			// 	defer rf.mu.Unlock()
-			// 	fmt.Printf("peer %v elected to leader, term %v\n", rf.me, currentTerm)
-			// 	rf.state = LEADER
-			// 	// TODO: should leader vote for anyone?
-			// 	rf.votedFor = -1
-
-			// } else {
-			// 	// Either election timeout, or didn't get enough votes
-			// 	fmt.Printf("peer %v didn't won the votes. got  %v votes\n", rf.me, votes)
-			// 	rf.mu.Lock()
-			// 	defer rf.mu.Unlock()
-			// 	rf.currentTerm++
-			// 	rf.votedFor = rf.me
-			// }
-
-			// rf.mu.Unlock()
 
 			rf.mu.Lock()
 			// TODO: there's chance that this peer is already leader but some responses hasn't return,
