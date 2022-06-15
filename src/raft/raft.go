@@ -248,7 +248,7 @@ func (rf *Raft) RequestVoteHandler(req *RequestVoteRequest, resp *RequestVoteRes
 	if rf.votedFor == -1 || rf.votedFor == req.CandidateID {
 		resp.GrantVote = true
 		rf.votedFor = req.CandidateID
-		fmt.Printf("I'm peer %v and im grandint vote to %v \n", rf.me, req.Term)
+		fmt.Printf("I'm peer %v and i grand vote to %v \n", rf.me, req.CandidateID)
 	}
 	// Your code here (2A, 2B).
 }
@@ -308,13 +308,12 @@ func (rf *Raft) AppendEntryHandler(req *AppendEntryRequest, resp *AppendEntryRes
 
 		rf.lastHeartbeatTime = time.Now()
 
+		// TODO: idealy the request term should only be current term or currentTerm + 1. Need to add that check later.
+
 		// This peer is out of date. Update term and turn into follower.
 		// TODO: later the catch up logci may be here.
 		if rf.currentTerm < req.Term {
-			fmt.Printf("im peer %v and im converting to follower. term: %v\n", rf.me, rf.currentTerm)
-			rf.state = FOLLOWER
-			rf.votedFor = -1
-			rf.currentTerm = req.Term
+			rf.convertToState(FOLLOWER, req.Term)
 		}
 	}
 
@@ -371,8 +370,7 @@ func (rf *Raft) killed() bool {
 func (rf *Raft) ticker() {
 	// fmt.Printf("me: %v\n", rf)
 	// fmt.Printf("my election timeout: %v \n", rf.electionTimeout)
-	firstRound := true
-	for rf.killed() == false && firstRound {
+	for rf.killed() == false {
 		// TODO: should i lock everytime? I don't think
 		var currentState RaftState
 		var currentTerm int
@@ -386,36 +384,33 @@ func (rf *Raft) ticker() {
 
 		switch currentState {
 		case LEADER:
-			//fmt.Printf("Im server %v and im leader ! \n", rf.me)
-			// Send heartbeats to all followers an candidate.
-			// leaderUpToDate := true
-			// for leaderUpToDate {
-			// 	// TODO: change each loop using a gorountine, and a wait group.
-			// 	for server, rpcClient := range rf.peers {
-			// 		if server == rf.me {
-			// 			continue
-			// 		}
-			// 		req := &AppendEntryRequest{
-			// 			Term:     currentTerm,
-			// 			LeaderID: rf.me,
-			// 			Data:     nil,
-			// 		}
-			// 		resp := &AppendEntryResponse{}
-			// 		rpcClient.Call("Raft.AppendEntryHandler", req, resp)
-			// 		// This means "me" is a stale leader, turns into a follower.
-			// 		if resp.Term > currentTerm {
-			// 			rf.mu.Lock()
-			// 			defer rf.mu.Unlock()
-			// 			rf.currentTerm = resp.Term
-			// 			rf.state = FOLLOWER
-			// 			rf.votedFor = -1
-			// 			leaderUpToDate = false
-			// 			break
-			// 		}
-			// 	}
 
-			// 	time.Sleep(HEARTBEAT_INTERVAL)
-			// }
+			// fmt.Printf("Im server %v and im leader ! \n", rf.me)
+			var wg sync.WaitGroup
+			for server, client := range rf.peers {
+				if server == rf.me {
+					continue
+				}
+				wg.Add(1)
+				go func(client *labrpc.ClientEnd) {
+					req := &AppendEntryRequest{
+						Term:     currentTerm,
+						LeaderID: rf.me,
+						Data:     nil,
+					}
+					resp := &AppendEntryResponse{}
+					client.Call("Raft.AppendEntryHandler", req, resp)
+					// This means "me" is a stale leader, turns into a follower.
+					if resp.Term > currentTerm {
+						rf.mu.Lock()
+						rf.convertToState(FOLLOWER, resp.Term)
+						rf.mu.Unlock()
+					}
+					wg.Done()
+				}(client)
+			}
+			wg.Wait()
+			time.Sleep(HEARTBEAT_INTERVAL)
 
 		case FOLLOWER:
 			now := time.Now()
@@ -461,7 +456,6 @@ func (rf *Raft) ticker() {
 					continue
 				}
 				go func(client *labrpc.ClientEnd) {
-					fmt.Printf("I'm peer %v and sending to rpc client %v\n", rf.me, client)
 					req := &RequestVoteRequest{
 						Term:        currentTerm,
 						CandidateID: rf.me,
@@ -472,8 +466,7 @@ func (rf *Raft) ticker() {
 					rf.mu.Lock()
 					defer rf.mu.Unlock()
 					if resp.Term > currentTerm {
-						rf.mu.Unlock()
-						rf.convertToFollower()
+						rf.convertToState(FOLLOWER, resp.Term)
 						return
 					}
 					if resp.GrantVote {
@@ -488,8 +481,6 @@ func (rf *Raft) ticker() {
 					cond.Broadcast()
 				}(client)
 			}
-
-			firstRound = false
 
 			// TODO: im waiting for rpc responses to update time. Need to change to have a timing on myself
 			// rf.mu.Lock()
@@ -531,6 +522,28 @@ func (rf *Raft) ticker() {
 
 			// rf.mu.Unlock()
 
+			rf.mu.Lock()
+			// TODO: there's chance that this peer is already leader but some responses hasn't return,
+			// since it's only waiting for the marjority not all. Need to deal with those responses as well.
+
+			// TODO: may need to double check the order of these statements.
+			for rf.votesReceived < len(rf.peers)/2+1 &&
+				rf.voteResponses < len(rf.peers) &&
+				rf.state == CANDIDATE &&
+				rf.voteTimeElapsed < rf.electionTimeout {
+				cond.Wait()
+			}
+			if rf.state != CANDIDATE {
+				rf.mu.Unlock()
+				continue
+			} else if rf.votesReceived >= len(rf.peers)/2+1 {
+				rf.convertToState(LEADER, rf.currentTerm)
+			} else if rf.voteResponses == len(rf.peers)-1 || rf.voteTimeElapsed > rf.electionTimeout {
+				rf.convertToState(CANDIDATE, rf.currentTerm+1)
+				rf.votedFor = rf.me
+			}
+			rf.mu.Unlock()
+
 			// TODO: start next round of votes.
 
 		default:
@@ -539,16 +552,16 @@ func (rf *Raft) ticker() {
 	}
 }
 
-// Need to unlock the lock before calling this funciton.
-func (rf *Raft) convertToFollower() {
-	// rf.mu.Lock()
-	// defer rf.mu.Unlock()
-	// rf.votedFor = -1
-	// rf.voteResponses = 0
-	// rf.state = FOLLOWER
-	// rf.votesReceived = 0
-	// rf.lastHeartbeatTime = time.Now()
-	// rf.voteTimeElapsed = 0
+// This mutation is done without lock, so the caller must lock before calling it.
+func (rf *Raft) convertToState(state RaftState, term int) {
+	fmt.Printf("peer %v convert from %v to %v\n", rf.me, rf.state, state)
+	rf.currentTerm = term
+	rf.votedFor = -1
+	rf.voteResponses = 0
+	rf.state = state
+	rf.votesReceived = 0
+	rf.lastHeartbeatTime = time.Now()
+	rf.voteTimeElapsed = 0
 }
 
 //
