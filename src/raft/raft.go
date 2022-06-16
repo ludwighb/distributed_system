@@ -64,8 +64,7 @@ type AppendEntryRequest struct {
 }
 
 type AppendEntryResponse struct {
-	Term    int
-	Success bool
+	Term int
 }
 
 type RequestVoteRequest struct {
@@ -95,7 +94,7 @@ const (
 	// TODO: 1. change the timeout to pass the lab test
 	// 2. do i have to change election timeout in every new term?
 	MIN_ELECTION_TIMEOUT = 300
-	MAX_ELECTION_TIMEOUT = 800
+	MAX_ELECTION_TIMEOUT = 500
 	HEARTBEAT_INTERVAL   = 100 * time.Millisecond // 0.1 s
 )
 
@@ -292,15 +291,13 @@ func (rf *Raft) sendRequestVote(server int, req *RequestVoteRequest, reply *Requ
 //
 func (rf *Raft) AppendEntryHandler(req *AppendEntryRequest, resp *AppendEntryResponse) {
 	// Your code here (2A, 2B).
-	fmt.Printf("im peer %v and i got heartbeeat from %v, term : %v \n", rf.me, req.LeaderID, req.Term)
-	resp.Success = false
-	// An empty logEntry is a heartbeat
 	if req.Data == nil {
 		rf.mu.Lock()
 		defer rf.mu.Unlock()
 		resp.Term = rf.currentTerm
+
+		fmt.Printf("im %v %v and i got heartbeeat from %v, term : %v \n", rf.state, rf.me, req.LeaderID, req.Term)
 		// the stale leader should then update term and convert to follower.
-		// TODO: handle this in stale leader.
 		if rf.currentTerm > req.Term {
 			return
 		}
@@ -308,12 +305,12 @@ func (rf *Raft) AppendEntryHandler(req *AppendEntryRequest, resp *AppendEntryRes
 		rf.lastHeartbeatTime = time.Now()
 
 		// TODO: idealy the request term should only be current term or currentTerm + 1. Need to add that check later.
-
 		// This peer is out of date. Update term and turn into follower.
-		// TODO: later the catch up logci may be here.
 		if rf.currentTerm < req.Term {
 			rf.convertToState(FOLLOWER, req.Term)
 		}
+
+		return
 	}
 
 }
@@ -388,26 +385,39 @@ func (rf *Raft) ticker() {
 				if server == rf.me {
 					continue
 				}
-				go func(client *labrpc.ClientEnd) {
+				go func(client *labrpc.ClientEnd, server int) {
 					for true {
+						var isLeader bool
+						rf.mu.Lock()
+						isLeader = rf.state == LEADER
+						rf.mu.Unlock()
+
+						if !isLeader {
+							return
+						}
+
+						fmt.Printf("im leader %v and im sending hearbeat to %v\n", rf.me, server)
 						req := &AppendEntryRequest{
 							Term:     currentTerm,
 							LeaderID: rf.me,
 							Data:     nil,
 						}
 						resp := &AppendEntryResponse{}
-						client.Call("Raft.AppendEntryHandler", req, resp)
+						ok := client.Call("Raft.AppendEntryHandler", req, resp)
+						if !ok {
+							fmt.Printf("leader %v failed to get heartbeat response from peer %v\n", rf.me, server)
+						}
 						// This means "me" is a stale leader, turns into a follower.
 						if resp.Term > currentTerm {
 							rf.mu.Lock()
 							rf.convertToState(FOLLOWER, resp.Term)
 							rf.mu.Unlock()
-							break
+							return
 						}
 						time.Sleep(HEARTBEAT_INTERVAL)
 					}
 
-				}(client)
+				}(client, server)
 			}
 
 			rf.mu.Lock()
@@ -459,7 +469,7 @@ func (rf *Raft) ticker() {
 				if server == rf.me {
 					continue
 				}
-				go func(client *labrpc.ClientEnd) {
+				go func(client *labrpc.ClientEnd, server int) {
 					req := &RequestVoteRequest{
 						Term:        currentTerm,
 						CandidateID: rf.me,
@@ -468,6 +478,7 @@ func (rf *Raft) ticker() {
 					resp := &RequestVoteResponse{}
 					ok := client.Call("Raft.RequestVoteHandler", req, resp)
 					if !ok {
+						fmt.Printf("peer %v failed to get vote responses from peer %v\n", rf.me, server)
 						return
 					}
 					rf.mu.Lock()
@@ -492,7 +503,7 @@ func (rf *Raft) ticker() {
 					}
 					fmt.Printf("peer %v got %v responses and got %v votes \n", rf.me, rf.voteResponses, rf.votesReceived)
 					cond.Broadcast()
-				}(client)
+				}(client, server)
 			}
 
 			rf.mu.Lock()
