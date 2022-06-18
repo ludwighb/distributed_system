@@ -93,8 +93,8 @@ const (
 const (
 	// TODO: 1. change the timeout to pass the lab test
 	// 2. do i have to change election timeout in every new term?
-	MIN_ELECTION_TIMEOUT = 300
-	MAX_ELECTION_TIMEOUT = 500
+	MIN_ELECTION_TIMEOUT = 200
+	MAX_ELECTION_TIMEOUT = 350
 	HEARTBEAT_INTERVAL   = 100 * time.Millisecond // 0.1 s
 )
 
@@ -118,7 +118,8 @@ type Raft struct {
 	state     RaftState
 
 	lastHeartbeatTime time.Time
-	electionTimeout   time.Duration // election time out is unique in every peer within min and max
+	// TODO: re randomize the electionTimeout every time the term changes.
+	electionTimeout time.Duration // election time out is unique in every peer within min and max
 
 	// 	for each server, index of the next log entry
 	// to send to that server (initialized to leader
@@ -378,6 +379,8 @@ func (rf *Raft) ticker() {
 		rf.mu.Unlock()
 
 		switch currentState {
+		// TODO: clarify: 1, if a loop continue, does the gorountine exit as well?
+		//
 		case LEADER:
 			// fmt.Printf("Im server %v and im leader ! \n", rf.me)
 			cond := sync.NewCond(&rf.mu)
@@ -387,34 +390,49 @@ func (rf *Raft) ticker() {
 				}
 				go func(client *labrpc.ClientEnd, server int) {
 					for true {
-						var isLeader bool
-						rf.mu.Lock()
-						isLeader = rf.state == LEADER
-						rf.mu.Unlock()
+						// var isLeader bool
+						// rf.mu.Lock()
+						// isLeader = rf.state == LEADER
+						// rf.mu.Unlock()
 
-						if !isLeader {
-							return
-						}
+						// if !isLeader {
+						// 	return
+						// }
 
 						fmt.Printf("im leader %v and im sending hearbeat to %v\n", rf.me, server)
-						req := &AppendEntryRequest{
-							Term:     currentTerm,
-							LeaderID: rf.me,
-							Data:     nil,
-						}
+						ch := make(chan int)
 						resp := &AppendEntryResponse{}
-						ok := client.Call("Raft.AppendEntryHandler", req, resp)
-						if !ok {
-							fmt.Printf("leader %v failed to get heartbeat response from peer %v\n", rf.me, server)
+						ok := false
+						go func() {
+							req := &AppendEntryRequest{
+								Term:     currentTerm,
+								LeaderID: rf.me,
+								Data:     nil,
+							}
+							ok = client.Call("Raft.AppendEntryHandler", req, resp)
+							ch <- 1
+						}()
+
+						select {
+						case <-time.After(HEARTBEAT_INTERVAL):
+							fmt.Printf("im leader %v and i haven't received heartbeat responses from %v after %v \n", rf.me, server, HEARTBEAT_INTERVAL)
+							continue
+
+						case <-ch:
+							if !ok {
+								fmt.Printf("leader %v failed to get heartbeat response from peer %v\n", rf.me, server)
+							}
+							// This means "me" is a stale leader, turns into a follower.
+							if resp.Term > currentTerm {
+								rf.mu.Lock()
+								// TODO: need to find a way to kill all the other goruntines that still firing heartbeat.
+								rf.convertToState(FOLLOWER, resp.Term)
+								rf.mu.Unlock()
+								return
+							}
+							time.Sleep(HEARTBEAT_INTERVAL)
 						}
-						// This means "me" is a stale leader, turns into a follower.
-						if resp.Term > currentTerm {
-							rf.mu.Lock()
-							rf.convertToState(FOLLOWER, resp.Term)
-							rf.mu.Unlock()
-							return
-						}
-						time.Sleep(HEARTBEAT_INTERVAL)
+
 					}
 
 				}(client, server)
@@ -522,7 +540,12 @@ func (rf *Raft) ticker() {
 				continue
 			} else if rf.votesReceived >= len(rf.peers)/2+1 {
 				rf.convertToState(LEADER, rf.currentTerm)
-			} else if rf.voteResponses == len(rf.peers)-1 || rf.voteTimeElapsed > rf.electionTimeout {
+			} else if rf.voteResponses == len(rf.peers)-1 {
+				fmt.Printf("peer %v got all vote responses, but not enough votes and start next round of vote. new term: %v\n", rf.me, rf.currentTerm+1)
+				rf.convertToState(CANDIDATE, rf.currentTerm+1)
+				rf.votedFor = rf.me
+			} else if rf.voteTimeElapsed > rf.electionTimeout {
+				fmt.Printf("peer %v didn't got enough votest before election timeout\n", rf.me)
 				rf.convertToState(CANDIDATE, rf.currentTerm+1)
 				rf.votedFor = rf.me
 			}
